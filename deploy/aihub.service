@@ -1,0 +1,20 @@
+[Unit]
+Description=Корпоративный ИИ-помощник (docker compose)
+Documentation=file://__APP_DIR__/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__APP_DIR__
+
+# Запуск может быть долгим: при первом старте собираются образы.
+TimeoutStartSec=0
+
+ExecStart=/usr/bin/docker compose __COMPOSE_PROFILES__ up -d --remove-orphans
+ExecStop=/usr/bin/docker compose __COMPOSE_PROFILES__ stop
+
+[Install]
+WantedBy=multi-user.target

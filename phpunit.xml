@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>app</directory>
+        </include>
+    </source>
+    <php>
+        <!--
+            force="true" обязателен: переменные из .env попадают в контейнер
+            через env_file и иначе перебивают тестовые значения — тесты бы шли
+            по боевой базе и с включённой проверкой CSRF.
+        -->
+        <!--
+            Дублируем в <server>: Laravel читает переменные сначала из $_SERVER,
+            и одних <env> ему мало — тесты уходили на боевые настройки.
+        -->
+        <server name="APP_ENV" value="testing" force="true"/>
+        <server name="DB_DATABASE" value="aihub_testing" force="true"/>
+        <server name="CACHE_STORE" value="array" force="true"/>
+        <server name="SESSION_DRIVER" value="array" force="true"/>
+        <server name="QUEUE_CONNECTION" value="sync" force="true"/>
+        <server name="MAIL_MAILER" value="array" force="true"/>
+        <server name="BCRYPT_ROUNDS" value="4" force="true"/>
+        <server name="RAG_AUTO_CONTEXT" value="false" force="true"/>
+
+        <env name="APP_ENV" value="testing" force="true"/>
+        <env name="APP_MAINTENANCE_DRIVER" value="file" force="true"/>
+        <env name="BCRYPT_ROUNDS" value="4" force="true"/>
+        <env name="CACHE_STORE" value="array" force="true"/>
+        <env name="MAIL_MAILER" value="array" force="true"/>
+        <env name="QUEUE_CONNECTION" value="sync" force="true"/>
+        <env name="SESSION_DRIVER" value="array" force="true"/>
+
+        <!--
+            Тесты идут на Postgres, а не на sqlite: база знаний держится
+            на расширении pgvector, которого в sqlite нет в принципе.
+            Базу для тестов создаёт make test (см. README).
+        -->
+        <env name="DB_CONNECTION" value="pgsql" force="true"/>
+        <env name="DB_DATABASE" value="aihub_testing" force="true"/>
+
+        <env name="RAG_AUTO_CONTEXT" value="false" force="true"/>
+    </php>
+</phpunit>

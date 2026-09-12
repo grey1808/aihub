@@ -1,0 +1,436 @@
+/**
+ * Чат: вложения, запись голоса, отправка и мобильное меню.
+ *
+ * Всё на обычном JS без фреймворка — страница одна, состояние простое,
+ * а лишняя библиотека на моноблоке без интернета только мешает.
+ */
+
+const form = document.getElementById('send-form');
+const csrf = document.querySelector('meta[name=csrf-token]')?.content ?? '';
+
+/* ------------------------------------------------------------------ */
+/*  Боковая панель со списком чатов (на телефоне — выдвижная)          */
+/* ------------------------------------------------------------------ */
+
+const drawer = document.querySelector('[data-drawer]');
+const overlay = document.querySelector('[data-drawer-overlay]');
+
+const setDrawer = (open) => {
+    if (!drawer) return;
+    drawer.classList.toggle('-translate-x-full', !open);
+    overlay?.classList.toggle('hidden', !open);
+};
+
+document.querySelector('[data-drawer-open]')?.addEventListener('click', () => setDrawer(true));
+document.querySelector('[data-drawer-close]')?.addEventListener('click', () => setDrawer(false));
+overlay?.addEventListener('click', () => setDrawer(false));
+
+/* ------------------------------------------------------------------ */
+/*  Меню пользователя                                                  */
+/* ------------------------------------------------------------------ */
+
+const menu = document.querySelector('[data-menu]');
+const menuPanel = document.querySelector('[data-menu-panel]');
+
+document.querySelector('[data-menu-toggle]')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    menuPanel?.classList.toggle('hidden');
+});
+
+document.addEventListener('click', (event) => {
+    if (menu && !menu.contains(event.target)) menuPanel?.classList.add('hidden');
+});
+
+/* Дальше — только если на странице есть открытый чат. */
+if (form) {
+    const input = document.getElementById('message');
+    const sendButton = document.getElementById('send-button');
+    const thinking = document.getElementById('thinking');
+    const list = document.getElementById('messages');
+    const errorBox = document.getElementById('composer-error');
+    const chips = document.getElementById('attachment-list');
+    const fileInput = document.getElementById('file-input');
+
+    const maxFiles = Number(form.dataset.maxFiles || 5);
+    const maxSize = Number(form.dataset.maxSize || 33554432);
+
+    /** Загруженные, но ещё не отправленные вложения. */
+    let attachments = [];
+    let sending = false;
+
+    const scrollDown = () => { list.scrollTop = list.scrollHeight; };
+
+    const showError = (text) => {
+        errorBox.textContent = text;
+        errorBox.classList.remove('hidden');
+        setTimeout(() => errorBox.classList.add('hidden'), 8000);
+    };
+
+    /* -------------------------------------------------------------- */
+    /*  Поле ввода                                                     */
+    /* -------------------------------------------------------------- */
+
+    // Поле растёт под текст, но не больше max-h-40 из вёрстки.
+    const autoGrow = () => {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    };
+
+    input.addEventListener('input', autoGrow);
+
+    // На телефоне Enter должен переносить строку: там это единственный
+    // способ написать многострочный текст, а отправка — кнопкой.
+    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+
+    input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey && !isTouch) {
+            event.preventDefault();
+            form.requestSubmit();
+        }
+    });
+
+    /* -------------------------------------------------------------- */
+    /*  Вложения                                                       */
+    /* -------------------------------------------------------------- */
+
+    const renderChips = () => {
+        chips.innerHTML = '';
+        chips.classList.toggle('hidden', attachments.length === 0);
+        chips.classList.toggle('flex', attachments.length > 0);
+
+        attachments.forEach((item) => {
+            const chip = document.createElement('div');
+            chip.className = 'flex max-w-full items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 py-1.5 pl-2 pr-1 text-sm';
+
+            const label = document.createElement('span');
+            label.className = 'flex min-w-0 items-center gap-1.5';
+
+            if (item.status === 'uploading') {
+                label.innerHTML = '<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-600"></span>';
+            } else {
+                label.textContent = item.icon || '📄';
+            }
+
+            const name = document.createElement('span');
+            name.className = 'truncate max-w-[10rem]';
+            name.textContent = item.name;
+            label.appendChild(name);
+
+            const meta = document.createElement('span');
+            meta.className = 'text-xs text-gray-400 shrink-0';
+
+            if (item.status === 'uploading') meta.textContent = 'загружается…';
+            else if (item.status === 'failed') { meta.textContent = 'ошибка'; meta.className = 'text-xs text-red-600 shrink-0'; }
+            else meta.textContent = item.size || '';
+
+            label.appendChild(meta);
+            chip.appendChild(label);
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-gray-200 hover:text-gray-700';
+            remove.setAttribute('aria-label', 'Убрать файл');
+            remove.textContent = '✕';
+            remove.addEventListener('click', () => removeAttachment(item));
+            chip.appendChild(remove);
+
+            chips.appendChild(chip);
+
+            // Расшифровку голосового показываем сразу: человек должен
+            // видеть, что распозналось, до того как отправит.
+            if (item.transcript) {
+                const note = document.createElement('div');
+                note.className = 'w-full rounded-lg bg-gray-50 px-3 py-1.5 text-xs italic text-gray-600';
+                note.textContent = '«' + item.transcript + '»';
+                chips.appendChild(note);
+            }
+
+            if (item.status === 'failed' && item.error) {
+                const note = document.createElement('div');
+                note.className = 'w-full rounded-lg bg-red-50 px-3 py-1.5 text-xs text-red-700';
+                note.textContent = item.error;
+                chips.appendChild(note);
+            }
+        });
+    };
+
+    const removeAttachment = async (item) => {
+        attachments = attachments.filter((a) => a !== item);
+        renderChips();
+
+        if (item.id) {
+            try {
+                await fetch('/attachments/' + item.id, {
+                    method: 'DELETE',
+                    headers: { 'X-CSRF-TOKEN': csrf, Accept: 'application/json' },
+                });
+            } catch { /* файл подчистит фоновая уборка */ }
+        }
+    };
+
+    const upload = async (file) => {
+        if (attachments.length >= maxFiles) {
+            showError('Больше ' + maxFiles + ' файлов к одному сообщению приложить нельзя.');
+            return;
+        }
+
+        if (file.size > maxSize) {
+            showError('Файл «' + file.name + '» слишком большой. Максимум — ' +
+                Math.round(maxSize / 1048576) + ' МБ.');
+            return;
+        }
+
+        const item = { name: file.name, status: 'uploading', icon: '📄' };
+        attachments.push(item);
+        renderChips();
+
+        const body = new FormData();
+        body.append('file', file);
+        body.append('thread_id', form.dataset.thread);
+
+        try {
+            const response = await fetch(form.dataset.uploadUrl, {
+                method: 'POST',
+                headers: { 'X-CSRF-TOKEN': csrf, Accept: 'application/json' },
+                body,
+            });
+
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Не удалось загрузить файл.');
+            }
+
+            Object.assign(item, data);
+
+            // Файл загрузился, но разобрать его не вышло (не распозналась
+            // речь, битый pdf) — показываем причину и не даём отправить мусор.
+            if (data.status === 'failed') {
+                item.status = 'failed';
+                item.error = data.error || 'Файл не удалось прочитать.';
+            }
+        } catch (error) {
+            item.status = 'failed';
+            item.error = error.message;
+        }
+
+        renderChips();
+    };
+
+    const uploadAll = (files) => Array.from(files).forEach(upload);
+
+    document.getElementById('attach-button').addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', () => {
+        uploadAll(fileInput.files);
+        fileInput.value = '';
+    });
+
+    // Перетаскивание файлов в окно.
+    ['dragenter', 'dragover'].forEach((type) => {
+        document.addEventListener(type, (event) => {
+            if (event.dataTransfer?.types?.includes('Files')) {
+                event.preventDefault();
+                form.classList.add('ring-2', 'ring-indigo-400', 'rounded-lg');
+            }
+        });
+    });
+
+    ['dragleave', 'drop'].forEach((type) => {
+        document.addEventListener(type, (event) => {
+            if (type === 'drop') event.preventDefault();
+            if (type === 'dragleave' && event.relatedTarget) return;
+            form.classList.remove('ring-2', 'ring-indigo-400', 'rounded-lg');
+        });
+    });
+
+    document.addEventListener('drop', (event) => {
+        if (event.dataTransfer?.files?.length) {
+            event.preventDefault();
+            uploadAll(event.dataTransfer.files);
+        }
+    });
+
+    // Вставка картинки из буфера обмена (скриншот через Ctrl+V).
+    input.addEventListener('paste', (event) => {
+        const files = Array.from(event.clipboardData?.items ?? [])
+            .filter((i) => i.kind === 'file')
+            .map((i) => i.getAsFile())
+            .filter(Boolean);
+
+        if (files.length) {
+            event.preventDefault();
+            files.forEach(upload);
+        }
+    });
+
+    /* -------------------------------------------------------------- */
+    /*  Запись голоса                                                  */
+    /* -------------------------------------------------------------- */
+
+    const recordButton = document.getElementById('record-button');
+    const recorderBox = document.getElementById('recorder');
+    const recorderTime = document.getElementById('recorder-time');
+
+    let recorder = null;
+    let recorderChunks = [];
+    let recorderTimer = null;
+    let recorderCancelled = false;
+
+    const micAvailable = window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+
+    if (!micAvailable) {
+        // Браузеры дают микрофон только на https или на localhost.
+        // С телефона по сети это обычная ситуация — объясняем прямо.
+        recordButton.addEventListener('click', () => showError(
+            'Запись голоса доступна только по HTTPS или на самом компьютере с приложением. ' +
+            'Сейчас страница открыта по обычному HTTP. Можно приложить готовый аудиофайл кнопкой скрепки, ' +
+            'а по поводу HTTPS обратитесь к администратору.'
+        ));
+    } else {
+        const pickMime = () => ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
+            .find((type) => MediaRecorder.isTypeSupported(type)) ?? '';
+
+        const stopTracks = () => recorder?.stream.getTracks().forEach((track) => track.stop());
+
+        const startRecording = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mime = pickMime();
+
+                recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+                recorderChunks = [];
+                recorderCancelled = false;
+
+                recorder.ondataavailable = (event) => {
+                    if (event.data.size) recorderChunks.push(event.data);
+                };
+
+                recorder.onstop = () => {
+                    stopTracks();
+                    clearInterval(recorderTimer);
+                    recorderBox.classList.add('hidden');
+                    recorderBox.classList.remove('flex');
+                    recordButton.classList.remove('bg-red-100', 'text-red-600');
+
+                    if (recorderCancelled || !recorderChunks.length) return;
+
+                    const type = recorder.mimeType || 'audio/webm';
+                    const extension = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+                    const blob = new Blob(recorderChunks, { type });
+
+                    upload(new File([blob], 'Голосовое сообщение.' + extension, { type }));
+                };
+
+                recorder.start();
+
+                const startedAt = Date.now();
+                recorderTime.textContent = '0:00';
+                recorderTimer = setInterval(() => {
+                    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+                    recorderTime.textContent = Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+
+                    // Пятиминутную запись Whisper будет жевать очень долго.
+                    if (seconds >= 300) document.getElementById('recorder-stop').click();
+                }, 250);
+
+                recorderBox.classList.remove('hidden');
+                recorderBox.classList.add('flex');
+                recordButton.classList.add('bg-red-100', 'text-red-600');
+            } catch (error) {
+                showError(error.name === 'NotAllowedError'
+                    ? 'Браузер не дал доступ к микрофону. Разрешите его в настройках сайта.'
+                    : 'Не удалось начать запись: ' + error.message);
+            }
+        };
+
+        recordButton.addEventListener('click', () => {
+            if (recorder?.state === 'recording') {
+                recorder.stop();
+            } else {
+                startRecording();
+            }
+        });
+
+        document.getElementById('recorder-stop').addEventListener('click', () => recorder?.stop());
+
+        document.getElementById('recorder-cancel').addEventListener('click', () => {
+            recorderCancelled = true;
+            recorder?.stop();
+        });
+    }
+
+    /* -------------------------------------------------------------- */
+    /*  Отправка                                                       */
+    /* -------------------------------------------------------------- */
+
+    const setBusy = (busy) => {
+        sending = busy;
+        input.disabled = busy;
+        sendButton.disabled = busy;
+        thinking.classList.toggle('hidden', !busy);
+    };
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+
+        if (sending) return;
+
+        const text = input.value.trim();
+        const ready = attachments.filter((a) => a.id && a.status !== 'uploading');
+
+        if (attachments.some((a) => a.status === 'uploading')) {
+            showError('Дождитесь, пока файлы загрузятся.');
+            return;
+        }
+
+        if (text === '' && ready.length === 0) {
+            showError('Напишите вопрос или приложите файл.');
+            return;
+        }
+
+        setBusy(true);
+
+        const payload = { message: text, attachments: ready.map((a) => a.id) };
+
+        input.value = '';
+        autoGrow();
+        attachments = [];
+        renderChips();
+
+        try {
+            const response = await fetch(form.action, {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': csrf,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
+
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Сервер ответил ошибкой ' + response.status);
+            }
+
+            // Свой вопрос рисуем ответом сервера: там уже есть вложения
+            // в том виде, в каком их сохранили.
+            list.insertAdjacentHTML('beforeend', data.question_html);
+            scrollDown();
+            list.insertAdjacentHTML('beforeend', data.html);
+        } catch (error) {
+            const box = document.createElement('div');
+            box.className = 'text-center text-sm text-red-600';
+            box.textContent = 'Не удалось получить ответ: ' + error.message;
+            list.appendChild(box);
+        } finally {
+            setBusy(false);
+            if (!isTouch) input.focus();
+            scrollDown();
+        }
+    });
+
+    scrollDown();
+}

@@ -1,0 +1,174 @@
+name: aihub
+
+services:
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      args:
+        WWWUSER: ${WWWUSER:-1000}
+        WWWGROUP: ${WWWGROUP:-1000}
+    container_name: aihub-app
+    restart: unless-stopped
+    working_dir: /var/www
+    env_file: .env
+    environment:
+      CONTAINER_ROLE: app
+    volumes:
+      - .:/var/www
+      # Папки с документами компании. Добавляйте сюда свои строки —
+      # в админке потом указываете путь /data/<имя>.
+      - ${DOCUMENTS_PATH:-./storage/app/documents}:/data/documents:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      # Чтобы из контейнера достучаться до LM Studio, запущенной на самом
+      # компьютере (она слушает localhost хоста, а не сети докера).
+      - "host.docker.internal:host-gateway"
+    networks: [aihub]
+
+  nginx:
+    image: nginx:alpine
+    container_name: aihub-nginx
+    restart: unless-stopped
+    ports:
+      # 0.0.0.0 — намеренно: к моноблоку подключаются по сети с других машин.
+      - "${APP_PORT:-8080}:80"
+      - "${APP_SSL_PORT:-8443}:443"
+    volumes:
+      - .:/var/www:ro
+      # Папка целиком: скрипт установки кладёт сюда ssl.conf, когда
+      # в .env включён HTTPS, и убирает, когда выключен.
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
+    depends_on: [app]
+    networks: [aihub]
+
+  # Очередь: индексация документов и синхронизация источников.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      args:
+        WWWUSER: ${WWWUSER:-1000}
+        WWWGROUP: ${WWWGROUP:-1000}
+    container_name: aihub-worker
+    restart: unless-stopped
+    working_dir: /var/www
+    env_file: .env
+    environment:
+      CONTAINER_ROLE: worker
+    command: php artisan queue:work --queue=sync,index,default --sleep=3 --tries=3 --timeout=7200 --max-time=3600
+    volumes:
+      - .:/var/www
+      - ${DOCUMENTS_PATH:-./storage/app/documents}:/data/documents:ro
+    depends_on:
+      app:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks: [aihub]
+
+  # Планировщик: раз в минуту смотрит, чему пора обновиться.
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      args:
+        WWWUSER: ${WWWUSER:-1000}
+        WWWGROUP: ${WWWGROUP:-1000}
+    container_name: aihub-scheduler
+    restart: unless-stopped
+    working_dir: /var/www
+    env_file: .env
+    environment:
+      CONTAINER_ROLE: scheduler
+    command: php artisan schedule:work
+    volumes:
+      - .:/var/www
+      - ${DOCUMENTS_PATH:-./storage/app/documents}:/data/documents:ro
+    depends_on:
+      app:
+        condition: service_started
+    networks: [aihub]
+
+  postgres:
+    # Образ с уже собранным pgvector — искать по векторам без него нечем.
+    image: pgvector/pgvector:pg16
+    container_name: aihub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-aihub}
+      POSTGRES_USER: ${DB_USERNAME:-aihub}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aihub}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-aihub} -d ${DB_DATABASE:-aihub}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [aihub]
+
+  redis:
+    image: redis:7-alpine
+    container_name: aihub-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [aihub]
+
+  # Нейросеть. Выключается профилем, если на компьютере используется LM Studio:
+  #   docker compose --profile with-ollama up -d   — поднять вместе с Ollama
+  #   docker compose up -d                         — без неё
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aihub-ollama
+    restart: unless-stopped
+    profiles: [with-ollama]
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      # Держим модель в памяти подольше: на моноблоке с 128 ГБ это не проблема,
+      # зато первый вопрос после паузы не ждёт повторной загрузки модели.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-2h}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
+    ports:
+      - "127.0.0.1:11434:11434"
+    networks: [aihub]
+
+  # Распознавание речи для голосовых сообщений. Ollama этого не умеет —
+  # нужна отдельная модель (Whisper). Говорит по протоколу OpenAI.
+  #   docker compose --profile with-whisper up -d
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    container_name: aihub-whisper
+    restart: unless-stopped
+    profiles: [with-whisper]
+    environment:
+      WHISPER__MODEL: ${STT_MODEL:-Systran/faster-whisper-small}
+      # Модель держим загруженной: иначе каждое голосовое ждёт её подъёма.
+      WHISPER__TTL: "-1"
+      ENABLE_UI: "false"
+    volumes:
+      - whisper-data:/root/.cache/huggingface
+    networks: [aihub]
+
+volumes:
+  postgres-data:
+  redis-data:
+  ollama-data:
+  whisper-data:
+
+networks:
+  aihub:
+    driver: bridge
