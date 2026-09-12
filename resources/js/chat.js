@@ -41,6 +41,21 @@ document.addEventListener('click', (event) => {
     if (menu && !menu.contains(event.target)) menuPanel?.classList.add('hidden');
 });
 
+/* Меню действий с чатом */
+
+const threadMenu = document.querySelector('[data-thread-menu]');
+const threadPanel = document.querySelector('[data-thread-menu-panel]');
+
+document.querySelector('[data-thread-menu-toggle]')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    threadPanel?.classList.toggle('hidden');
+    menuPanel?.classList.add('hidden');
+});
+
+document.addEventListener('click', (event) => {
+    if (threadMenu && !threadMenu.contains(event.target)) threadPanel?.classList.add('hidden');
+});
+
 /* Дальше — только если на странице есть открытый чат. */
 if (form) {
     const input = document.getElementById('message');

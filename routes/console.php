@@ -2,6 +2,7 @@
 
 use App\Jobs\SyncSourceJob;
 use App\Models\ChatAttachment;
+use App\Models\ChatThread;
 use App\Models\KnowledgeSource;
 use Illuminate\Support\Facades\Schedule;
 
@@ -26,3 +27,20 @@ Schedule::call(function () {
         ->get()
         ->each->delete();
 })->hourly()->name('attachments-cleanup')->withoutOverlapping();
+
+/*
+ * Чистим корзину: чаты, удалённые больше месяца назад, убираем совсем.
+ * Вместе с ними уходят сообщения и приложенные файлы.
+ */
+Schedule::call(function () {
+    $days = (int) config('chat.trash_lifetime_days');
+
+    if ($days <= 0) {
+        return;
+    }
+
+    ChatThread::onlyTrashed()
+        ->where('deleted_at', '<', now()->subDays($days))
+        ->get()
+        ->each->forceDelete();
+})->dailyAt('03:30')->name('chat-trash-cleanup')->withoutOverlapping();

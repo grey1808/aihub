@@ -5,6 +5,7 @@ namespace App\Agent;
 use App\Knowledge\Connectors\OneCODataConnector;
 use App\Knowledge\Connectors\OneCSqlConnector;
 use App\Models\KnowledgeSource;
+use App\Models\Project;
 use App\Models\Setting;
 use App\Models\User;
 
@@ -31,7 +32,7 @@ class PromptBuilder
 8. Если сотрудник просит что-то запомнить на будущее, сохрани это инструментом remember. Если просит забыть — forget.
 TXT;
 
-    public function build(?User $user = null): string
+    public function build(?User $user = null, ?Project $project = null): string
     {
         $parts = [Setting::get('system_prompt', self::DEFAULT_PROMPT)];
 
@@ -47,10 +48,14 @@ TXT;
 
         $parts[] = 'Сегодня '.now()->translatedFormat('j F Y, l').'.';
 
-        $catalog = $this->sourceCatalog();
+        $catalog = $this->sourceCatalog($project);
 
         if ($catalog !== '') {
             $parts[] = $catalog;
+        }
+
+        if ($project) {
+            $parts[] = $this->projectCard($project);
         }
 
         // Личные заметки идут последними — так они ближе всего к вопросу
@@ -96,17 +101,49 @@ TXT;
              ."или изменить в заметках — используй инструменты remember и forget.";
     }
 
-    /** Карта источников: что подключено, что внутри, как этим пользоваться. */
-    private function sourceCatalog(): string
+    /**
+     * Проект, в котором идёт разговор.
+     *
+     * Инструкция и заметки проекта общие для всех его чатов — это и есть
+     * то, ради чего проекты нужны: не пересказывать контекст заново
+     * в каждом новом чате по одной и той же теме.
+     */
+    private function projectCard(Project $project): string
     {
-        $sources = KnowledgeSource::where('is_enabled', true)->orderBy('id')->get();
+        $lines = ["РАЗГОВОР ИДЁТ В ПРОЕКТЕ «{$project->name}»."];
+
+        if ($project->description) {
+            $lines[] = 'О чём проект: '.trim($project->description);
+        }
+
+        if ($project->instructions) {
+            $lines[] = "Инструкция для этого проекта — следуй ей во всех ответах здесь:\n".trim($project->instructions);
+        }
+
+        if (trim((string) $project->notes) !== '') {
+            $lines[] = "Накопленные заметки по проекту (общие для всех его чатов):\n".trim($project->notes)
+                     ."\n\nЕсли по ходу разговора выяснится что-то важное для всего проекта, "
+                     ."сохрани это инструментом remember со scope = project.";
+        }
+
+        return implode("\n\n", $lines);
+    }
+
+    /** Карта источников: что подключено, что внутри, как этим пользоваться. */
+    private function sourceCatalog(?Project $project = null): string
+    {
+        $sources = $project && $project->sourceIds() !== []
+            ? KnowledgeSource::whereIn('id', $project->sourceIds())->where('is_enabled', true)->orderBy('id')->get()
+            : KnowledgeSource::where('is_enabled', true)->orderBy('id')->get();
 
         if ($sources->isEmpty()) {
             return 'Источники данных пока не настроены — база знаний пуста. '
                  .'Если у сотрудника вопрос по документам компании, честно скажи, что база знаний ещё не заполнена.';
         }
 
-        $lines = ['ПОДКЛЮЧЁННЫЕ ИСТОЧНИКИ ДАННЫХ:'];
+        $lines = [$project && $project->sourceIds() !== []
+            ? 'ИСТОЧНИКИ ДАННЫХ, РАЗРЕШЁННЫЕ В ЭТОМ ПРОЕКТЕ (искать только в них):'
+            : 'ПОДКЛЮЧЁННЫЕ ИСТОЧНИКИ ДАННЫХ:'];
 
         foreach ($sources as $source) {
             $config = $source->plainConfig();

@@ -64,11 +64,22 @@ class AgentRunner
             ? trim($question)
             : Str::limit($this->attachments->searchableText($attachments), 400, '');
 
-        // Инструментам, которые работают с личной памятью, сообщаем,
-        // чья это память.
+        $project = $thread->project;
+        $allowedSources = $project?->sourceIds() ?? [];
+
+        // Сообщаем инструментам контекст разговора: чья память, какой проект
+        // и в каких источниках разрешено искать.
         foreach ($this->tools->available() as $tool) {
             if (method_exists($tool, 'forUser')) {
                 $tool->forUser($thread->user);
+            }
+
+            if (method_exists($tool, 'forProject')) {
+                $tool->forProject($project);
+            }
+
+            if (method_exists($tool, 'restrictTo')) {
+                $tool->restrictTo($allowedSources);
             }
         }
 
@@ -103,7 +114,7 @@ class AgentRunner
         // а вопрос почти всегда про документы компании. Инструмент при этом
         // остаётся: модель может доискать, если нужного не хватило.
         if (config('rag.auto_context') && trim($searchQuery) !== '') {
-            $found = $this->retriever->search($searchQuery);
+            $found = $this->retriever->search($searchQuery, null, $allowedSources);
 
             if ($found !== []) {
                 $blocks = [];
@@ -310,7 +321,7 @@ class AgentRunner
     {
         $limit = (int) Setting::get('history_limit', 12);
 
-        $messages = [['role' => 'system', 'content' => $this->prompts->build($thread->user)]];
+        $messages = [['role' => 'system', 'content' => $this->prompts->build($thread->user, $thread->project)]];
 
         $previous = $thread->messages()
             ->whereIn('role', ['user', 'assistant'])

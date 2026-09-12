@@ -78,6 +78,11 @@ class User extends Authenticatable
         return $this->hasMany(ChatThread::class)->latest('last_message_at');
     }
 
+    public function projects(): HasMany
+    {
+        return $this->hasMany(Project::class)->orderBy('name');
+    }
+
     /** Как помощник обращается к человеку. */
     public function callName(): string
     {

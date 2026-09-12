@@ -2,6 +2,7 @@
 
 namespace App\Agent\Tools;
 
+use App\Models\Project;
 use App\Models\User;
 use Illuminate\Support\Str;
 
@@ -15,6 +16,7 @@ use Illuminate\Support\Str;
 class RememberTool implements Tool
 {
     private ?User $user = null;
+    private ?Project $project = null;
 
     /**
      * Кому принадлежит память. Ставится агентом перед вызовом —
@@ -23,6 +25,12 @@ class RememberTool implements Tool
     public function forUser(?User $user): void
     {
         $this->user = $user;
+    }
+
+    /** Проект текущего разговора, если он есть. */
+    public function forProject(?Project $project): void
+    {
+        $this->project = $project;
     }
 
     public function name(): string
@@ -50,6 +58,14 @@ class RememberTool implements Tool
                             'description' => 'Одна короткая заметка, законченной фразой, на русском. '
                                 .'Например: «Ведёт учёт по ООО «Ромашка», отчёты нужны в формате таблицы».',
                         ],
+                        'scope' => [
+                            'type' => 'string',
+                            'enum' => ['personal', 'project'],
+                            'description' => 'personal — про самого сотрудника, помнить всегда и везде. '
+                                .'project — про тему текущего проекта: это увидят все чаты проекта, '
+                                .'но только они. Если разговор идёт в проекте и заметка про тему, а не про человека — '
+                                .'выбирай project.',
+                        ],
                     ],
                     'required' => ['note'],
                 ],
@@ -71,12 +87,20 @@ class RememberTool implements Tool
             return ['output' => 'Пустая заметка, записывать нечего.'];
         }
 
-        if (mb_strlen($user->memory ?? '') > 20000) {
-            return ['output' => 'Память переполнена. Скажи сотруднику, что заметки стоит почистить в профиле.'];
+        $toProject = ($arguments['scope'] ?? 'personal') === 'project' && $this->project !== null;
+
+        $target = $toProject ? $this->project : $user;
+        $current = $toProject ? $this->project->notes : $user->memory;
+
+        if (mb_strlen((string) $current) > 20000) {
+            return ['output' => 'Заметки переполнены. Скажи сотруднику, что их стоит почистить '
+                               .($toProject ? 'на странице проекта.' : 'в профиле.')];
         }
 
-        $user->rememberNote($note);
+        $target->rememberNote($note);
 
-        return ['output' => 'Записал в память: '.Str::limit($note, 200)];
+        return ['output' => $toProject
+            ? 'Записал в заметки проекта «'.$this->project->name.'»: '.Str::limit($note, 200)
+            : 'Записал в личную память: '.Str::limit($note, 200)];
     }
 }

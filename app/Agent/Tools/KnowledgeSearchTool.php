@@ -9,8 +9,22 @@ use Illuminate\Support\Str;
 /** Поиск по загруженным документам компании. */
 class KnowledgeSearchTool implements Tool
 {
+    /** @var array<int, int> источники, которыми ограничен поиск в этом проекте */
+    private array $allowed = [];
+
     public function __construct(private readonly Retriever $retriever)
     {
+    }
+
+    /**
+     * Ограничить поиск источниками проекта.
+     *
+     * Ставится агентом перед вызовом. Модель это ограничение обойти не может:
+     * даже если она попросит искать в другом источнике, он отфильтруется.
+     */
+    public function restrictTo(array $sourceIds): void
+    {
+        $this->allowed = array_values(array_filter(array_map('intval', $sourceIds)));
     }
 
     public function name(): string
@@ -53,10 +67,17 @@ class KnowledgeSearchTool implements Tool
             return ['output' => 'Пустой поисковый запрос.'];
         }
 
-        $sourceIds = [];
+        $sourceIds = $this->allowed;
 
         if (! empty($arguments['source_id'])) {
-            $source = KnowledgeSource::find((int) $arguments['source_id']);
+            $requested = (int) $arguments['source_id'];
+
+            if ($this->allowed !== [] && ! in_array($requested, $this->allowed, true)) {
+                return ['output' => 'Этот источник в текущем проекте искать нельзя. '
+                                   .'Доступны только: '.implode(', ', $this->allowed)];
+            }
+
+            $source = KnowledgeSource::find($requested);
 
             if ($source) {
                 $sourceIds = [$source->id];

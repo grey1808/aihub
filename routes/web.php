@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\ProjectController;
 use Illuminate\Support\Facades\Route;
 
 // Главная сразу ведёт в чат: сотрудник включил моноблок, открыл браузер —
@@ -20,6 +21,16 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::post('/chat/{thread}/send', [ChatController::class, 'send'])->name('chat.send');
     Route::patch('/chat/{thread}', [ChatController::class, 'rename'])->name('chat.rename');
     Route::delete('/chat/{thread}', [ChatController::class, 'destroy'])->name('chat.destroy');
+    Route::patch('/chat/{thread}/move', [ChatController::class, 'move'])->name('chat.move');
+
+    Route::get('/trash', [ChatController::class, 'trash'])->name('chat.trash');
+    Route::post('/trash/{thread}/restore', [ChatController::class, 'restore'])->name('chat.restore');
+    Route::delete('/trash/{thread}', [ChatController::class, 'forceDestroy'])->name('chat.force-destroy');
+
+    Route::post('/projects', [ProjectController::class, 'store'])->name('projects.store');
+    Route::get('/projects/{project}', [ProjectController::class, 'show'])->name('projects.show');
+    Route::patch('/projects/{project}', [ProjectController::class, 'update'])->name('projects.update');
+    Route::delete('/projects/{project}', [ProjectController::class, 'destroy'])->name('projects.destroy');
 
     Route::post('/attachments', [AttachmentController::class, 'store'])->name('attachments.store');
     Route::get('/attachments/{attachment}', [AttachmentController::class, 'show'])->name('attachments.show');

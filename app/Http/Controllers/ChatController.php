@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Agent\AgentRunner;
 use App\Models\ChatAttachment;
 use App\Models\ChatThread;
+use App\Models\Project;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -16,27 +17,78 @@ class ChatController extends Controller
 
         return $thread
             ? redirect()->route('chat.show', $thread)
-            : view('chat.index', ['threads' => collect(), 'thread' => null]);
+            : view('chat.index', $this->sidebar($request) + ['thread' => null]);
     }
 
     public function show(Request $request, ChatThread $thread)
     {
         $this->authorizeThread($request, $thread);
 
-        return view('chat.index', [
-            'threads' => $request->user()->threads()->get(),
-            'thread'  => $thread->load('messages.attachments'),
+        $thread->project?->touchUsage();
+
+        return view('chat.index', $this->sidebar($request) + [
+            'thread' => $thread->load('messages.attachments', 'project'),
         ]);
     }
 
     public function store(Request $request)
     {
+        $data = $request->validate(['project_id' => ['nullable', 'integer']]);
+
+        $project = $this->ownedProject($request, $data['project_id'] ?? null);
+
         $thread = $request->user()->threads()->create([
+            'project_id'      => $project?->id,
             'title'           => 'Новый чат',
             'last_message_at' => now(),
         ]);
 
         return redirect()->route('chat.show', $thread);
+    }
+
+    /** Перенести чат в проект или вынести из него. */
+    public function move(Request $request, ChatThread $thread)
+    {
+        $this->authorizeThread($request, $thread);
+
+        $data = $request->validate(['project_id' => ['nullable', 'integer']]);
+
+        $project = $this->ownedProject($request, $data['project_id'] ?? null);
+
+        $thread->update(['project_id' => $project?->id]);
+
+        return back()->with('status', $project
+            ? "Чат перенесён в проект «{$project->name}»."
+            : 'Чат вынесен из проекта.');
+    }
+
+    /** Корзина: что удалили и ещё можно вернуть. */
+    public function trash(Request $request)
+    {
+        return view('chat.trash', $this->sidebar($request) + [
+            'thread'  => null,
+            'deleted' => $request->user()->threads()->onlyTrashed()->latest('deleted_at')->get(),
+            'days'    => (int) config('chat.trash_lifetime_days'),
+        ]);
+    }
+
+    public function restore(Request $request, int $threadId)
+    {
+        $thread = $request->user()->threads()->onlyTrashed()->findOrFail($threadId);
+
+        $thread->restore();
+
+        return redirect()->route('chat.show', $thread)->with('status', 'Чат восстановлен.');
+    }
+
+    /** Окончательное удаление — уже без возврата. */
+    public function forceDestroy(Request $request, int $threadId)
+    {
+        $thread = $request->user()->threads()->onlyTrashed()->findOrFail($threadId);
+
+        $thread->forceDelete();
+
+        return back()->with('status', 'Чат удалён окончательно.');
     }
 
     public function send(Request $request, ChatThread $thread, AgentRunner $agent)
@@ -97,9 +149,12 @@ class ChatController extends Controller
     {
         $this->authorizeThread($request, $thread);
 
+        // Мягкое удаление: чат уезжает в корзину и его можно вернуть.
         $thread->delete();
 
-        return redirect()->route('chat.index');
+        return redirect()->route('chat.index')
+            ->with('status', 'Чат удалён. Его можно вернуть из корзины в течение '
+                             .config('chat.trash_lifetime_days').' дней.');
     }
 
     public function rename(Request $request, ChatThread $thread)
@@ -111,6 +166,31 @@ class ChatController extends Controller
         ]));
 
         return back();
+    }
+
+    /**
+     * Данные для боковой панели: проекты и чаты вне проектов.
+     */
+    private function sidebar(Request $request): array
+    {
+        $user = $request->user();
+
+        return [
+            'projects' => $user->projects()->with(['threads' => fn ($q) => $q->limit(50)])->get(),
+            'threads'  => $user->threads()->whereNull('project_id')->get(),
+            'trashed'  => $user->threads()->onlyTrashed()->count(),
+        ];
+    }
+
+    private function ownedProject(Request $request, ?int $projectId): ?Project
+    {
+        if (! $projectId) {
+            return null;
+        }
+
+        $project = Project::find($projectId);
+
+        return $project && $project->user_id === $request->user()->id ? $project : null;
     }
 
     /**
