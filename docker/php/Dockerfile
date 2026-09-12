@@ -31,6 +31,7 @@ RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor
 RUN pecl install redis && docker-php-ext-enable redis
 
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/99-app.ini
+COPY docker/php/www.conf /usr/local/etc/php-fpm.d/zz-app.conf
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 RUN groupadd --force -g ${WWWGROUP} app \
@@ -40,8 +41,6 @@ WORKDIR /var/www
 
 COPY docker/php/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
-
-RUN sed -i 's/user = www-data/user = app/; s/group = www-data/group = app/' /usr/local/etc/php-fpm.d/www.conf
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 EXPOSE 9000

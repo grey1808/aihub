@@ -386,6 +386,38 @@ if (form) {
         thinking.classList.toggle('hidden', !busy);
     };
 
+    /**
+     * Живой пузырь ответа: статус, сворачиваемые мысли и текст,
+     * который печатается по мере того, как модель его придумывает.
+     */
+    const createLiveBubble = () => {
+        const wrap = document.createElement('div');
+        wrap.className = 'flex justify-start';
+        wrap.innerHTML = `
+            <div class="max-w-[85%] rounded-2xl border border-gray-200 bg-white px-3.5 py-2.5 shadow-sm sm:max-w-3xl sm:px-4 sm:py-3">
+                <div data-status class="flex items-center gap-2 text-xs text-gray-500">
+                    <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-600"></span>
+                    <span data-status-text>Думаю…</span>
+                </div>
+                <details data-thinking class="mt-2 hidden rounded-lg bg-gray-50 px-3 py-2">
+                    <summary class="cursor-pointer text-xs text-gray-500 hover:text-gray-700">Ход мыслей</summary>
+                    <div data-thinking-text class="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-gray-500"></div>
+                </details>
+                <div data-answer class="prose prose-sm mt-2 hidden max-w-none whitespace-pre-wrap break-words"></div>
+            </div>`;
+
+        list.appendChild(wrap);
+
+        return {
+            statusText: wrap.querySelector('[data-status-text]'),
+            status: wrap.querySelector('[data-status]'),
+            thinking: wrap.querySelector('[data-thinking]'),
+            thinkingText: wrap.querySelector('[data-thinking-text]'),
+            answer: wrap.querySelector('[data-answer]'),
+            root: wrap,
+        };
+    };
+
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
 
@@ -413,33 +445,92 @@ if (form) {
         attachments = [];
         renderChips();
 
+        const bubble = createLiveBubble();
+        scrollDown();
+
+        // Прокручиваем вниз, только если пользователь и так внизу —
+        // иначе он не сможет перечитать написанное выше, пока идёт ответ.
+        const atBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 120;
+
         try {
-            const response = await fetch(form.action, {
+            const response = await fetch(form.dataset.streamUrl, {
                 method: 'POST',
                 headers: {
                     'X-CSRF-TOKEN': csrf,
-                    Accept: 'application/json',
+                    Accept: 'text/event-stream',
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(payload),
             });
 
-            const data = await response.json().catch(() => ({}));
-
-            if (!response.ok) {
-                throw new Error(data.message || 'Сервер ответил ошибкой ' + response.status);
+            if (!response.ok || !response.body) {
+                throw new Error('Сервер ответил ошибкой ' + response.status);
             }
 
-            // Свой вопрос рисуем ответом сервера: там уже есть вложения
-            // в том виде, в каком их сохранили.
-            list.insertAdjacentHTML('beforeend', data.question_html);
-            scrollDown();
-            list.insertAdjacentHTML('beforeend', data.html);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const handle = (event, data) => {
+                const stick = atBottom();
+
+                if (event === 'question') {
+                    bubble.root.insertAdjacentHTML('beforebegin', data.html);
+                } else if (event === 'status') {
+                    bubble.statusText.textContent = data.text;
+                } else if (event === 'thinking') {
+                    bubble.thinking.classList.remove('hidden');
+                    bubble.thinkingText.textContent += data.text;
+                } else if (event === 'delta') {
+                    bubble.status.classList.add('hidden');
+                    bubble.answer.classList.remove('hidden');
+                    bubble.answer.textContent += data.text;
+                } else if (event === 'done') {
+                    // Готовое сообщение приходит уже свёрстанным: с разметкой,
+                    // источниками и вложениями. Заменяем им живой пузырь.
+                    bubble.root.outerHTML = data.html;
+                } else if (event === 'failed') {
+                    bubble.status.classList.add('hidden');
+                    bubble.answer.classList.remove('hidden');
+                    bubble.answer.classList.add('text-red-600');
+                    bubble.answer.textContent = data.message;
+                }
+
+                if (stick) scrollDown();
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Одно событие — это блок строк до пустой строки.
+                let split;
+                while ((split = buffer.indexOf('\n\n')) !== -1) {
+                    const raw = buffer.slice(0, split);
+                    buffer = buffer.slice(split + 2);
+
+                    let name = 'message';
+                    let payloadText = '';
+
+                    raw.split('\n').forEach((line) => {
+                        if (line.startsWith('event:')) name = line.slice(6).trim();
+                        else if (line.startsWith('data:')) payloadText += line.slice(5).trim();
+                    });
+
+                    if (payloadText === '') continue;
+
+                    try {
+                        handle(name, JSON.parse(payloadText));
+                    } catch { /* битое событие пропускаем */ }
+                }
+            }
         } catch (error) {
-            const box = document.createElement('div');
-            box.className = 'text-center text-sm text-red-600';
-            box.textContent = 'Не удалось получить ответ: ' + error.message;
-            list.appendChild(box);
+            bubble.status.classList.add('hidden');
+            bubble.answer.classList.remove('hidden');
+            bubble.answer.classList.add('text-red-600');
+            bubble.answer.textContent = 'Не удалось получить ответ: ' + error.message + '. Обновите страницу.';
         } finally {
             setBusy(false);
             if (!isTouch) input.focus();

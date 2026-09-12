@@ -19,6 +19,7 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::post('/chat', [ChatController::class, 'store'])->name('chat.store');
     Route::get('/chat/{thread}', [ChatController::class, 'show'])->name('chat.show');
     Route::post('/chat/{thread}/send', [ChatController::class, 'send'])->name('chat.send');
+    Route::post('/chat/{thread}/stream', [ChatController::class, 'stream'])->name('chat.stream');
     Route::patch('/chat/{thread}', [ChatController::class, 'rename'])->name('chat.rename');
     Route::delete('/chat/{thread}', [ChatController::class, 'destroy'])->name('chat.destroy');
     Route::patch('/chat/{thread}/move', [ChatController::class, 'move'])->name('chat.move');

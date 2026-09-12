@@ -12,7 +12,7 @@ class ChatMessage extends Model
     use HasFactory;
 
     protected $fillable = [
-        'chat_thread_id', 'role', 'content', 'sources', 'tool_calls', 'tokens', 'duration_ms',
+        'chat_thread_id', 'role', 'content', 'thinking', 'sources', 'tool_calls', 'tokens', 'duration_ms',
     ];
 
     protected $casts = [

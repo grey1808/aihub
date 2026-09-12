@@ -6,6 +6,7 @@
           method="POST"
           action="{{ route('chat.send', $thread) }}"
           data-upload-url="{{ route('attachments.store') }}"
+          data-stream-url="{{ route('chat.stream', $thread) }}"
           data-thread="{{ $thread->id }}"
           data-max-files="{{ $limits['maxFiles'] }}"
           data-max-size="{{ $limits['maxSize'] }}"
@@ -79,7 +80,7 @@
         </div>
 
         <p id="thinking" class="mt-2 hidden text-xs text-gray-500">
-            Помощник думает. После включения компьютера первый ответ может занять до минуты.
+            Помощник отвечает. После включения компьютера первый ответ может занять до минуты.
         </p>
 
         <p class="mt-1.5 hidden text-[11px] text-gray-400 sm:block">

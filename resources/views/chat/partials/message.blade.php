@@ -17,6 +17,13 @@
                 <div class="whitespace-pre-wrap break-words">{{ $message->content }}</div>
             @endif
         @else
+            @if ($message->thinking)
+                <details class="mb-2 rounded-lg bg-gray-50 px-3 py-2">
+                    <summary class="cursor-pointer text-xs text-gray-500 hover:text-gray-700">Ход мыслей</summary>
+                    <div class="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-gray-500">{{ $message->thinking }}</div>
+                </details>
+            @endif
+
             <div class="prose prose-sm max-w-none break-words">
                 {!! \App\Support\Markdown::toHtml($message->content) !!}
             </div>

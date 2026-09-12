@@ -86,6 +86,8 @@ class LlmClient
 
         return [
             'content'    => $this->stripThinking((string) ($message['content'] ?? '')),
+            'thinking'   => trim((string) ($message['reasoning'] ?? $message['reasoning_content'] ?? ''))
+                            ?: $this->extractThinking((string) ($message['content'] ?? '')),
             'tool_calls' => $message['tool_calls'] ?? [],
             'tokens'     => $data['usage']['total_tokens'] ?? null,
         ];
@@ -138,6 +140,217 @@ class LlmClient
         }
 
         return array_values($vectors);
+    }
+
+    /**
+     * Потоковый запрос: ответ приходит кусочками, по мере того как модель
+     * его придумывает. Ради этого всё и затевалось — локальная модель
+     * пишет ответ десятки секунд, и смотреть всё это время на пустой экран
+     * невыносимо.
+     *
+     * @param  callable(string $type, string $text): void  $onChunk
+     *         вызывается на каждый кусок: type — 'thinking' или 'content'
+     * @return array{content:string,thinking:string,tool_calls:array}
+     */
+    public function stream(array $messages, array $tools, callable $onChunk, array $options = []): array
+    {
+        $payload = array_filter([
+            'model'       => $options['model'] ?? config('llm.model'),
+            'messages'    => $messages,
+            'temperature' => $options['temperature'] ?? (float) config('llm.temperature'),
+            'max_tokens'  => $options['max_tokens'] ?? (int) config('llm.max_tokens'),
+            'tools'       => $tools ?: null,
+            'stream'      => true,
+        ], fn ($v) => $v !== null);
+
+        $content = '';
+        $thinking = '';
+        $toolCalls = [];
+
+        // Рассуждающие модели заворачивают ход мыслей в <think>…</think>.
+        // Тег приходит по кускам, поэтому режем поток на лету.
+        $inThinking = false;
+        $buffer = '';
+
+        $handle = function (string $piece) use (&$content, &$thinking, &$inThinking, &$buffer, $onChunk) {
+            $buffer .= $piece;
+
+            while ($buffer !== '') {
+                if ($inThinking) {
+                    $end = strpos($buffer, '</think>');
+
+                    if ($end === false) {
+                        // Хвост может оказаться началом закрывающего тега —
+                        // придержим его до следующего куска.
+                        $safe = $this->keepTail($buffer, '</think>');
+                        $thinking .= $safe;
+
+                        if ($safe !== '') {
+                            $onChunk('thinking', $safe);
+                        }
+
+                        $buffer = substr($buffer, strlen($safe));
+
+                        return;
+                    }
+
+                    $part = substr($buffer, 0, $end);
+                    $thinking .= $part;
+
+                    if ($part !== '') {
+                        $onChunk('thinking', $part);
+                    }
+
+                    $buffer = substr($buffer, $end + strlen('</think>'));
+                    $inThinking = false;
+
+                    continue;
+                }
+
+                $start = strpos($buffer, '<think>');
+
+                if ($start === false) {
+                    $safe = $this->keepTail($buffer, '<think>');
+                    $content .= $safe;
+
+                    if ($safe !== '') {
+                        $onChunk('content', $safe);
+                    }
+
+                    $buffer = substr($buffer, strlen($safe));
+
+                    return;
+                }
+
+                $part = substr($buffer, 0, $start);
+                $content .= $part;
+
+                if ($part !== '') {
+                    $onChunk('content', $part);
+                }
+
+                $buffer = substr($buffer, $start + strlen('<think>'));
+                $inThinking = true;
+            }
+        };
+
+        $response = $this->withSlot(fn () => $this->http()->withOptions([
+            'stream' => true,
+        ])->post('/chat/completions', $payload));
+
+        if ($response->failed()) {
+            Log::error('LLM stream failed', ['status' => $response->status()]);
+
+            throw new LlmException($this->humanError($response->status(), (string) $response->body()));
+        }
+
+        $body = $response->toPsrResponse()->getBody();
+        $line = '';
+
+        while (! $body->eof()) {
+            $chunk = $body->read(4096);
+
+            if ($chunk === '') {
+                continue;
+            }
+
+            $line .= $chunk;
+
+            while (($pos = strpos($line, "\n")) !== false) {
+                $raw = trim(substr($line, 0, $pos));
+                $line = substr($line, $pos + 1);
+
+                if ($raw === '' || ! str_starts_with($raw, 'data:')) {
+                    continue;
+                }
+
+                $data = trim(substr($raw, 5));
+
+                if ($data === '[DONE]') {
+                    break 2;
+                }
+
+                $json = json_decode($data, true);
+
+                if (! is_array($json)) {
+                    continue;
+                }
+
+                $delta = $json['choices'][0]['delta'] ?? [];
+
+                if (isset($delta['content']) && $delta['content'] !== '') {
+                    $handle((string) $delta['content']);
+                }
+
+                // Мысли приходят по-разному: Ollama кладёт их в reasoning,
+                // некоторые сборки — в reasoning_content, а часть моделей
+                // просто оборачивает в <think> внутри content (это выше).
+                foreach (['reasoning', 'reasoning_content'] as $field) {
+                    if (isset($delta[$field]) && $delta[$field] !== '') {
+                        $thinking .= $delta[$field];
+                        $onChunk('thinking', (string) $delta[$field]);
+                    }
+                }
+
+                foreach ($delta['tool_calls'] ?? [] as $call) {
+                    $this->mergeToolCall($toolCalls, $call);
+                }
+            }
+        }
+
+        // Остаток буфера, если поток кончился на полуслове.
+        if ($buffer !== '') {
+            if ($inThinking) {
+                $thinking .= $buffer;
+                $onChunk('thinking', $buffer);
+            } else {
+                $content .= $buffer;
+                $onChunk('content', $buffer);
+            }
+        }
+
+        return [
+            'content'    => trim($content),
+            'thinking'   => trim($thinking),
+            'tool_calls' => array_values($toolCalls),
+        ];
+    }
+
+    /**
+     * Отдаём то, что точно можно отдать сразу, придерживая хвост,
+     * который может оказаться началом тега <think> или </think>.
+     */
+    private function keepTail(string $buffer, string $tag): string
+    {
+        $max = min(strlen($tag) - 1, strlen($buffer));
+
+        for ($i = $max; $i > 0; $i--) {
+            if (str_starts_with($tag, substr($buffer, -$i))) {
+                return substr($buffer, 0, strlen($buffer) - $i);
+            }
+        }
+
+        return $buffer;
+    }
+
+    /** Вызов инструмента приходит по частям — собираем его обратно. */
+    private function mergeToolCall(array &$calls, array $piece): void
+    {
+        $index = $piece['index'] ?? count($calls);
+
+        $calls[$index] ??= ['id' => '', 'type' => 'function', 'function' => ['name' => '', 'arguments' => '']];
+
+        if (! empty($piece['id'])) {
+            $calls[$index]['id'] = $piece['id'];
+        }
+
+        if (! empty($piece['function']['name'])) {
+            $calls[$index]['function']['name'] = $piece['function']['name'];
+        }
+
+        if (isset($piece['function']['arguments'])) {
+            $calls[$index]['function']['arguments'] .= $piece['function']['arguments'];
+        }
     }
 
     /** Список моделей, которые сейчас доступны в рантайме. */
@@ -230,6 +443,12 @@ class LlmClient
         $clean = preg_replace('/<think>.*?<\/think>/is', '', $content);
 
         return trim($clean ?? $content);
+    }
+
+    /** Ход мыслей, если модель завернула его в <think>…</think>. */
+    private function extractThinking(string $content): string
+    {
+        return preg_match('/<think>(.*?)<\/think>/is', $content, $m) ? trim($m[1]) : '';
     }
 
     private function humanError(int $status, string $body): string

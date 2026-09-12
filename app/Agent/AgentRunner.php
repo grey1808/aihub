@@ -31,12 +31,31 @@ class AgentRunner
     ) {
     }
 
-    /**
-     * @param  iterable<ChatAttachment>  $attachments  файлы, приложенные к вопросу
-     */
     public function answer(ChatThread $thread, string $question, iterable $attachments = []): ChatMessage
     {
+        return $this->run($thread, $question, $attachments, null);
+    }
+
+    /**
+     * То же самое, но с потоком событий наружу: статусы, мысли и текст
+     * ответа по мере появления.
+     *
+     * @param  callable(string $event, array $data): void  $emit
+     */
+    public function answerStreamed(
+        ChatThread $thread,
+        string $question,
+        iterable $attachments,
+        callable $emit
+    ): ChatMessage {
+        return $this->run($thread, $question, $attachments, $emit);
+    }
+
+    private function run(ChatThread $thread, string $question, iterable $attachments, ?callable $emit): ChatMessage
+    {
         $startedAt = microtime(true);
+        $thinking = '';
+        $notify = fn (string $event, array $data = []) => $emit ? $emit($event, $data) : null;
 
         $attachments = collect($attachments);
         $images = $attachments->where('kind', ChatAttachment::KIND_IMAGE)
@@ -114,7 +133,13 @@ class AgentRunner
         // а вопрос почти всегда про документы компании. Инструмент при этом
         // остаётся: модель может доискать, если нужного не хватило.
         if (config('rag.auto_context') && trim($searchQuery) !== '') {
+            $notify('status', ['text' => 'Ищу в документах компании…']);
+
             $found = $this->retriever->search($searchQuery, null, $allowedSources);
+
+            $notify('status', ['text' => $found === []
+                ? 'В документах ничего не нашлось'
+                : 'Нашёл фрагментов: '.count($found)]);
 
             if ($found !== []) {
                 $blocks = [];
@@ -151,15 +176,20 @@ class AgentRunner
             // делаем один прямой запрос к ней — с уже найденным контекстом,
             // но без инструментов.
             if ($images->isNotEmpty()) {
-                return $this->answerWithImages($thread, $messages, $prompt, $images, $collectedSources, $toolLog, $startedAt);
+                $notify('status', ['text' => 'Смотрю изображение…']);
+
+                return $this->answerWithImages($thread, $messages, $prompt, $images, $collectedSources, $toolLog, $startedAt, $emit);
             }
 
             for ($step = 0; $step < (int) config('llm.max_tool_iterations'); $step++) {
-                $reply = $this->llm->chat($messages, $definitions);
+                $notify('status', ['text' => $step === 0 ? 'Думаю…' : 'Обдумываю найденное…']);
+
+                $reply = $this->ask($messages, $definitions, $emit);
                 $tokens = $reply['tokens'] ?? $tokens;
+                $thinking = trim($thinking."\n\n".($reply['thinking'] ?? ''));
 
                 if (empty($reply['tool_calls'])) {
-                    return $this->store($thread, $reply['content'], $collectedSources, $toolLog, $tokens, $startedAt);
+                    return $this->store($thread, $reply['content'], $collectedSources, $toolLog, $tokens, $startedAt, $thinking);
                 }
 
                 $messages[] = [
@@ -171,6 +201,8 @@ class AgentRunner
                 foreach ($reply['tool_calls'] as $call) {
                     $name = $call['function']['name'] ?? '';
                     $arguments = $this->decodeArguments($call['function']['arguments'] ?? '{}');
+
+                    $notify('status', ['text' => $this->toolLabel($name, $arguments)]);
 
                     if (! isset($tools[$name])) {
                         $output = "Инструмента {$name} не существует. Доступны: ".implode(', ', array_keys($tools));
@@ -207,9 +239,12 @@ class AgentRunner
                            .'Если данных не хватило — прямо скажи, чего именно не хватает.',
             ];
 
-            $final = $this->llm->chat($messages);
+            $notify('status', ['text' => 'Собираю ответ…']);
 
-            return $this->store($thread, $final['content'], $collectedSources, $toolLog, $final['tokens'] ?? $tokens, $startedAt);
+            $final = $this->ask($messages, [], $emit);
+
+            return $this->store($thread, $final['content'], $collectedSources, $toolLog,
+                $final['tokens'] ?? $tokens, $startedAt, trim($thinking."\n\n".($final['thinking'] ?? '')));
         } catch (LlmException $e) {
             return $this->store($thread, '⚠️ '.$e->getMessage(), [], $toolLog, null, $startedAt);
         } catch (\Throwable $e) {
@@ -224,6 +259,37 @@ class AgentRunner
                 $startedAt
             );
         }
+    }
+
+    /**
+     * Один запрос к модели. Когда есть слушатель — идём потоком,
+     * иначе обычным запросом. Логика вокруг от этого не меняется.
+     */
+    private function ask(array $messages, array $tools, ?callable $emit, array $options = []): array
+    {
+        if (! $emit) {
+            return $this->llm->chat($messages, $tools, $options);
+        }
+
+        $result = $this->llm->stream($messages, $tools, function (string $type, string $text) use ($emit) {
+            $emit($type === 'thinking' ? 'thinking' : 'delta', ['text' => $text]);
+        }, $options);
+
+        return $result + ['tokens' => null];
+    }
+
+    /** Понятная человеку подпись к тому, что сейчас делает помощник. */
+    private function toolLabel(string $tool, array $arguments): string
+    {
+        return match ($tool) {
+            'knowledge_search' => 'Ищу в документах: «'.Str::limit((string) ($arguments['query'] ?? ''), 60).'»',
+            'list_knowledge_sources' => 'Смотрю список источников…',
+            'onec_sql_query'   => 'Запрашиваю данные из 1С…',
+            'onec_odata_query' => 'Запрашиваю данные из 1С…',
+            'remember'         => 'Записываю в память…',
+            'forget'           => 'Убираю из памяти…',
+            default            => 'Выполняю: '.$tool,
+        };
     }
 
     /**
@@ -270,7 +336,8 @@ class AgentRunner
         $images,
         array $sources,
         array $toolLog,
-        float $startedAt
+        float $startedAt,
+        ?callable $emit = null
     ): ChatMessage {
         $model = trim((string) config('llm.vision_model'));
 
@@ -305,9 +372,10 @@ class AgentRunner
             'result'    => 'изображения переданы модели',
         ];
 
-        $reply = $this->llm->chat($messages, [], ['model' => $model]);
+        $reply = $this->ask($messages, [], $emit, ['model' => $model]);
 
-        return $this->store($thread, $reply['content'], $sources, $toolLog, $reply['tokens'] ?? null, $startedAt);
+        return $this->store($thread, $reply['content'], $sources, $toolLog,
+            $reply['tokens'] ?? null, $startedAt, $reply['thinking'] ?? '');
     }
 
     /**
@@ -369,7 +437,8 @@ class AgentRunner
         array $sources,
         array $toolLog,
         ?int $tokens,
-        float $startedAt
+        float $startedAt,
+        string $thinking = ''
     ): ChatMessage {
         // Один документ мог попасть в ответ несколькими кусками —
         // в списке источников показываем его один раз.
@@ -381,6 +450,7 @@ class AgentRunner
         $message = $thread->messages()->create([
             'role'        => 'assistant',
             'content'     => trim($content) !== '' ? $content : 'Не удалось сформулировать ответ. Переспросите, пожалуйста.',
+            'thinking'    => trim($thinking) !== '' ? trim($thinking) : null,
             'sources'     => $unique ?: null,
             'tool_calls'  => $toolLog ?: null,
             'tokens'      => $tokens,

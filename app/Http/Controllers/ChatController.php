@@ -8,6 +8,7 @@ use App\Models\ChatThread;
 use App\Models\Project;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ChatController extends Controller
 {
@@ -143,6 +144,81 @@ class ChatController extends Controller
         }
 
         return redirect()->route('chat.show', $thread);
+    }
+
+    /**
+     * Отправка сообщения с потоковым ответом.
+     *
+     * Ответ идёт построчно в формате Server-Sent Events: сначала статусы
+     * («ищу в документах»), потом мысли модели, потом сам текст по кускам.
+     * Обычный send() остался — он проще и используется, когда поток
+     * недоступен.
+     */
+    public function stream(Request $request, ChatThread $thread, AgentRunner $agent): StreamedResponse
+    {
+        $this->authorizeThread($request, $thread);
+
+        $data = $request->validate([
+            'message'       => ['nullable', 'string', 'max:8000'],
+            'attachments'   => ['array', 'max:'.(int) config('attachments.max_per_message')],
+            'attachments.*' => ['integer'],
+        ]);
+
+        $attachments = $this->claimAttachments($request->user()->id, $data['attachments'] ?? []);
+        $text = trim((string) ($data['message'] ?? ''));
+
+        abort_if($text === '' && $attachments->isEmpty(), 422, 'Напишите вопрос или приложите файл.');
+
+        $message = $thread->messages()->create(['role' => 'user', 'content' => $text]);
+
+        $attachments->each(fn (ChatAttachment $a) => $a->update([
+            'chat_message_id' => $message->id,
+            'chat_thread_id'  => $thread->id,
+        ]));
+
+        if ($thread->messages()->count() === 1) {
+            $thread->update(['title' => Str::limit($this->titleFor($text, $attachments), 60)]);
+        }
+
+        $thread->update(['last_message_at' => now()]);
+
+        $questionHtml = view('chat.partials.message', ['message' => $message->load('attachments')])->render();
+
+        return response()->stream(function () use ($thread, $text, $attachments, $agent, $questionHtml) {
+            $send = function (string $event, array $data) {
+                echo 'event: '.$event."\n";
+                echo 'data: '.json_encode($data, JSON_UNESCAPED_UNICODE)."\n\n";
+
+                // Без этого php-fpm копит ответ в буфере и поток
+                // превращается в обычный запрос с паузой.
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+
+                flush();
+            };
+
+            $send('question', ['html' => $questionHtml]);
+
+            try {
+                $answer = $agent->answerStreamed($thread, $text, $attachments, $send);
+
+                $send('done', [
+                    'html'         => view('chat.partials.message', ['message' => $answer])->render(),
+                    'thread_title' => $thread->fresh()->title,
+                ]);
+            } catch (\Throwable $e) {
+                report($e);
+                $send('failed', ['message' => 'Не удалось получить ответ. Попробуйте ещё раз.']);
+            }
+        }, 200, [
+            'Content-Type'      => 'text/event-stream',
+            'Cache-Control'     => 'no-cache, no-transform',
+            'Connection'        => 'keep-alive',
+            // Просим nginx не копить ответ в буфере — иначе весь поток
+            // придёт разом в самом конце.
+            'X-Accel-Buffering' => 'no',
+        ]);
     }
 
     public function destroy(Request $request, ChatThread $thread)
