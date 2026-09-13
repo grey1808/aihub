@@ -42,6 +42,35 @@ class LlmClient
         return $this->apiKey ?? (string) config('llm.drivers.'.config('llm.driver').'.api_key');
     }
 
+    /** Адрес, по которому считаем вектора. Может отличаться от адреса диалога. */
+    public function embeddingBaseUrl(): string
+    {
+        $url = trim((string) config('llm.embedding_base_url'));
+
+        return $url !== '' ? rtrim($url, '/') : $this->baseUrl();
+    }
+
+    private function embeddingHttp(): PendingRequest
+    {
+        $url = trim((string) config('llm.embedding_base_url'));
+
+        if ($url === '') {
+            return $this->http();
+        }
+
+        return Http::baseUrl(rtrim($url, '/'))
+            ->withToken((string) (config('llm.embedding_api_key') ?: 'local'))
+            ->acceptJson()
+            ->timeout((int) config('llm.timeout'))
+            ->connectTimeout(10);
+    }
+
+    /** Считаем ли вектора отдельным сервисом. */
+    public function embeddingsAreSeparate(): bool
+    {
+        return trim((string) config('llm.embedding_base_url')) !== '';
+    }
+
     private function http(?int $timeout = null): PendingRequest
     {
         return Http::baseUrl($this->baseUrl())
@@ -106,10 +135,14 @@ class LlmClient
             return [];
         }
 
-        $response = $this->withSlot(fn () => $this->http()->post('/embeddings', [
+        // Если эмбеддинги считает отдельный сервис, очередь к модели диалога
+        // им занимать не нужно — они друг другу не мешают.
+        $request = fn () => $this->embeddingHttp()->post('/embeddings', [
             'model' => config('llm.embedding_model'),
             'input' => array_values($texts),
-        ]));
+        ]);
+
+        $response = $this->embeddingsAreSeparate() ? $request() : $this->withSlot($request);
 
         if ($response->failed()) {
             Log::error('LLM embeddings failed', ['status' => $response->status(), 'body' => $response->body()]);
@@ -368,19 +401,42 @@ class LlmClient
         )));
     }
 
+    /** Модели на сервисе эмбеддингов. */
+    public function embeddingModels(): array
+    {
+        if (! $this->embeddingsAreSeparate()) {
+            return $this->models();
+        }
+
+        try {
+            $response = $this->embeddingHttp()->timeout(15)->get('/models');
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return $response->failed() ? [] : array_values(array_filter(array_map(
+            fn ($m) => $m['id'] ?? null,
+            $response->json('data') ?? []
+        )));
+    }
+
     /** Жив ли рантайм. Используется на странице диагностики в админке. */
     public function ping(): array
     {
         try {
             $models = $this->models();
 
+            $embeddingModels = $this->embeddingModels();
+
             return [
                 'ok'       => true,
                 'driver'   => config('llm.driver'),
                 'base_url' => $this->baseUrl(),
                 'models'   => $models,
+                'embedding_base_url' => $this->embeddingBaseUrl(),
+                'embeddings_separate' => $this->embeddingsAreSeparate(),
                 'chat_model_loaded'  => $this->modelPresent(config('llm.model'), $models),
-                'embed_model_loaded' => $this->modelPresent(config('llm.embedding_model'), $models),
+                'embed_model_loaded' => $this->modelPresent(config('llm.embedding_model'), $embeddingModels),
             ];
         } catch (\Throwable $e) {
             return [

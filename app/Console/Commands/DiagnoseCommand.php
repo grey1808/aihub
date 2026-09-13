@@ -56,9 +56,14 @@ class DiagnoseCommand extends Command
                 ? $this->info("  модель для диалога «{$chat}» — на месте")
                 : $this->error("  модель для диалога «{$chat}» НЕ загружена. Выполните: ollama pull {$chat}");
 
+            if ($ping['embeddings_separate'] ?? false) {
+                $this->line('  вектора считает отдельный сервис: '.$ping['embedding_base_url']);
+            }
+
             $ping['embed_model_loaded']
                 ? $this->info("  модель для векторов «{$embed}» — на месте")
-                : $this->error("  модель для векторов «{$embed}» НЕ загружена. Выполните: ollama pull {$embed}");
+                : $this->error("  модель для векторов «{$embed}» НЕ загружена по адресу "
+                              .($ping['embedding_base_url'] ?? '').". Загрузите её там.");
 
             $ok = $ok && $ping['chat_model_loaded'] && $ping['embed_model_loaded'];
         }
