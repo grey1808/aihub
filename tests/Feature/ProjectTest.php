@@ -181,4 +181,34 @@ class ProjectTest extends TestCase
 
         $this->assertNull($thread->fresh()->project_id);
     }
+
+    public function test_перетаскивание_получает_ответ_данными_а_не_редиректом(): void
+    {
+        // Перетаскивание мышью ходит через fetch. Если ответить редиректом,
+        // fetch пойдёт по нему тем же методом PATCH и упрётся в маршрут
+        // переименования — тот ответит 422, и браузер покажет ошибку,
+        // хотя перенос уже прошёл. Именно так и было.
+        $user = User::factory()->create();
+        $project = $user->projects()->create(['name' => 'Проект']);
+        $thread = $user->threads()->create(['title' => 'Чат']);
+
+        $response = $this->actingAs($user)
+            ->patchJson(route('chat.move', $thread), ['project_id' => $project->id]);
+
+        $response->assertOk()->assertJsonPath('project_id', $project->id);
+
+        $this->assertSame($project->id, $thread->fresh()->project_id);
+    }
+
+    public function test_обычная_форма_переноса_по_прежнему_редиректит(): void
+    {
+        $user = User::factory()->create();
+        $project = $user->projects()->create(['name' => 'Проект']);
+        $thread = $user->threads()->create(['title' => 'Чат']);
+
+        $this->actingAs($user)
+            ->from(route('chat.show', $thread))
+            ->patch(route('chat.move', $thread), ['project_id' => $project->id])
+            ->assertRedirect(route('chat.show', $thread));
+    }
 }

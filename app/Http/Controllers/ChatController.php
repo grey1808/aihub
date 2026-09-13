@@ -58,9 +58,22 @@ class ChatController extends Controller
 
         $thread->update(['project_id' => $project?->id]);
 
-        return back()->with('status', $project
+        $message = $project
             ? "Чат перенесён в проект «{$project->name}»."
-            : 'Чат вынесен из проекта.');
+            : 'Чат вынесен из проекта.';
+
+        // Для перетаскивания мышью отвечаем данными, а не редиректом.
+        // fetch при методе PATCH идёт по редиректу тем же методом, а не GET —
+        // и упирается в PATCH /chat/{id}, то есть в переименование, которому
+        // нужен заголовок. Перенос при этом уже прошёл, но браузер видел ошибку.
+        if ($request->wantsJson()) {
+            return response()->json([
+                'message'    => $message,
+                'project_id' => $project?->id,
+            ]);
+        }
+
+        return back()->with('status', $message);
     }
 
     /** Корзина: что удалили и ещё можно вернуть. */

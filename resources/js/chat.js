@@ -180,6 +180,7 @@ document.querySelectorAll('[data-drop-project]').forEach((zone) => {
             // из формы, а в теле JSON Laravel её не видит.
             const response = await fetch('/chat/' + threadId + '/move', {
                 method: 'PATCH',
+                redirect: 'error',
                 headers: {
                     'X-CSRF-TOKEN': csrf,
                     Accept: 'application/json',
@@ -188,7 +189,12 @@ document.querySelectorAll('[data-drop-project]').forEach((zone) => {
                 body: JSON.stringify({ project_id: zone.dataset.dropProject || null }),
             });
 
-            if (!response.ok) throw new Error('код ' + response.status);
+            if (!response.ok) {
+                // Показываем причину словами, а не голый код: по коду
+                // невозможно понять, что произошло.
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.message || 'сервер ответил кодом ' + response.status);
+            }
 
             // Перечитываем страницу: так список папок и счётчики
             // гарантированно совпадают с тем, что в базе.
