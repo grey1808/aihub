@@ -62,6 +62,28 @@ else
 fi
 
 if have systemctl; then
+    say "Режим загрузки: $(systemctl get-default 2>/dev/null || echo '-')"
+fi
+
+# Подключён ли монитор. Для мини-ПК это не праздный вопрос: приложения
+# с окном (LM Studio) без графической сессии могут не запуститься,
+# а сессия без монитора поднимается не всегда.
+CONNECTED=""
+for out in /sys/class/drm/card*-*/status; do
+    [ -r "$out" ] || continue
+    if [ "$(cat "$out" 2>/dev/null)" = "connected" ]; then
+        CONNECTED="$CONNECTED $(basename "$(dirname "$out")")"
+    fi
+done
+
+if [ -n "$CONNECTED" ]; then
+    say "Подключённые мониторы:$CONNECTED"
+else
+    say "Мониторы: не подключены (машина работает без экрана)"
+    say "  Тогда LM Studio нужно запускать без окна: lms server start"
+fi
+
+if have systemctl; then
     say "systemd: есть (автозапуск настроить можно)"
     LINGER="$(loginctl show-user "$(whoami)" -p Linger --value 2>/dev/null)"
     say "Служба пользователя работает без входа в систему (linger): ${LINGER:-неизвестно}"
@@ -214,6 +236,29 @@ head2 "Сеть"
 IPS=$(hostname -I 2>/dev/null || ip -4 addr show scope global 2>/dev/null | awk '/inet/ {print $2}' | cut -d/ -f1 | tr '\n' ' ')
 say "Адреса компьютера в сети: ${IPS:-не определились}"
 say "По одному из них сотрудники будут открывать помощника."
+say ""
+
+# На этой машине два проводных порта разной скорости — полезно знать,
+# в какой из них она включена.
+for iface in /sys/class/net/*; do
+    name=$(basename "$iface")
+    [ "$name" = "lo" ] && continue
+    [ -r "$iface/operstate" ] || continue
+    [ "$(cat "$iface/operstate" 2>/dev/null)" = "up" ] || continue
+
+    # Только настоящие сетевые карты: у виртуальных интерфейсов докера
+    # и мостов нет ссылки на устройство, и в списке они только мешают.
+    [ -e "$iface/device" ] || continue
+
+    SPEED=$(cat "$iface/speed" 2>/dev/null)
+    ADDR=$(ip -4 addr show "$name" 2>/dev/null | awk '/inet /{print $2; exit}')
+
+    if [ -n "$SPEED" ] && [ "$SPEED" != "-1" ]; then
+        say "  $name: подключён, ${SPEED} Мбит/с, адрес ${ADDR:-нет}"
+    else
+        say "  $name: подключён, адрес ${ADDR:-нет}"
+    fi
+done
 
 for target in "https://github.com" "https://registry-1.docker.io" "https://ollama.com"; do
     if curl -s --max-time 8 -o /dev/null -w "%{http_code}" "$target" 2>/dev/null | grep -qE '^[23]'; then
@@ -228,6 +273,16 @@ say "Если доступа в интернет нет совсем — уст�
 say "но образы и модели придётся принести на носителе."
 
 # ---------------------------------------------------------------------------
+head2 "Питание"
+
+say "Для сценария «включили — всё работает» важно, чтобы компьютер сам"
+say "включался после пропадания электричества. Настройка называется"
+say "Restore on AC Power Loss (или AC Back, After Power Failure) и живёт"
+say "в BIOS — из системы её не увидеть. Проверьте, что она в положении Power On."
+say ""
+say "Если есть источник бесперебойного питания — напишите какой,"
+say "чтобы настроить корректное выключение при долгом отсутствии света."
+
 head2 "Права"
 
 if sudo -n true 2>/dev/null; then
