@@ -31,6 +31,12 @@ class ProjectController extends Controller
         return view('projects.show', [
             'project'  => $project,
             'threads'  => $project->threads()->get(),
+            // Чаты, которые можно добавить сюда: свои и пока не в этом проекте.
+            'available' => $request->user()->threads()
+                ->with('project')
+                ->where(fn ($q) => $q->whereNull('project_id')->orWhere('project_id', '!=', $project->id))
+                ->limit(100)
+                ->get(),
             'sources'  => KnowledgeSource::where('is_enabled', true)->orderBy('id')->get(),
             'registry' => app(ConnectorRegistry::class),
         ]);
@@ -64,6 +70,25 @@ class ProjectController extends Controller
         ] + ($notesChanged ? ['notes_updated_at' => now()] : []));
 
         return back()->with('status', 'Сохранено.');
+    }
+
+    /** Добавить в проект уже существующие чаты — списком, галочками. */
+    public function attach(Request $request, Project $project)
+    {
+        $this->authorizeProject($request, $project);
+
+        $data = $request->validate([
+            'threads'   => ['required', 'array'],
+            'threads.*' => ['integer'],
+        ], [], ['threads' => 'чаты']);
+
+        $moved = $request->user()->threads()
+            ->whereIn('id', $data['threads'])
+            ->update(['project_id' => $project->id]);
+
+        return back()->with('status', $moved === 1
+            ? 'Чат добавлен в проект.'
+            : "Чатов добавлено: {$moved}.");
     }
 
     public function destroy(Request $request, Project $project)

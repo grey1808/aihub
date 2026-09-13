@@ -37,7 +37,8 @@
     @foreach ($projects as $project)
         @php($isCurrent = $thread?->project_id === $project->id)
 
-        <details class="border-b border-gray-50" @if ($isCurrent) open @endif>
+        <details class="border-b border-gray-50" @if ($isCurrent) open @endif
+                 data-drop-project="{{ $project->id }}">
             <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm hover:bg-gray-50">
                 <svg class="h-4 w-4 shrink-0 text-gray-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round"
@@ -58,11 +59,16 @@
                 </a>
 
                 @forelse ($project->threads as $item)
-                    <a href="{{ route('chat.show', $item) }}"
-                       class="block px-9 py-2 text-sm hover:bg-white {{ $thread && $item->id === $thread->id ? 'bg-white font-medium text-indigo-700' : 'text-gray-700' }}">
-                        <span class="block truncate">{{ $item->title }}</span>
-                        <span class="text-[11px] text-gray-400">{{ $item->last_message_at?->diffForHumans() }}</span>
-                    </a>
+                    <div class="group relative">
+                        <a href="{{ route('chat.show', $item) }}"
+                           draggable="true" data-thread-id="{{ $item->id }}"
+                           class="block py-2 pl-9 pr-9 text-sm hover:bg-white {{ $thread && $item->id === $thread->id ? 'bg-white font-medium text-indigo-700' : 'text-gray-700' }}">
+                            <span class="block truncate">{{ $item->title }}</span>
+                            <span class="text-[11px] text-gray-400">{{ $item->last_message_at?->diffForHumans() }}</span>
+                        </a>
+
+                        @include('chat.partials.chat-menu-button', ['item' => $item])
+                    </div>
                 @empty
                     <p class="px-9 py-2 text-xs text-gray-400">Чатов пока нет</p>
                 @endforelse
@@ -76,21 +82,35 @@
         </details>
     @endforeach
 
-    @if ($projects->isNotEmpty() && $threads->isNotEmpty())
-        <p class="px-3 pb-1 pt-3 text-[11px] uppercase tracking-wide text-gray-400">Без проекта</p>
-    @endif
+    <div data-drop-project="">
+        @if ($projects->isNotEmpty())
+            <p class="px-3 pb-1 pt-3 text-[11px] uppercase tracking-wide text-gray-400">Без проекта</p>
+        @endif
 
     @forelse ($threads as $item)
-        <a href="{{ route('chat.show', $item) }}"
-           class="block border-b border-gray-50 px-4 py-3 text-sm hover:bg-gray-50 {{ $thread && $item->id === $thread->id ? 'bg-indigo-50 font-medium text-indigo-700' : 'text-gray-700' }}">
-            <span class="block truncate">{{ $item->title }}</span>
-            <span class="text-[11px] text-gray-400">{{ $item->last_message_at?->diffForHumans() }}</span>
-        </a>
+        <div class="group relative border-b border-gray-50">
+            <a href="{{ route('chat.show', $item) }}"
+               draggable="true" data-thread-id="{{ $item->id }}"
+               class="block py-3 pl-4 pr-9 text-sm hover:bg-gray-50 {{ $thread && $item->id === $thread->id ? 'bg-indigo-50 font-medium text-indigo-700' : 'text-gray-700' }}">
+                <span class="block truncate">{{ $item->title }}</span>
+                <span class="text-[11px] text-gray-400">{{ $item->last_message_at?->diffForHumans() }}</span>
+            </a>
+
+            @include('chat.partials.chat-menu-button', ['item' => $item])
+        </div>
     @empty
         @if ($projects->isEmpty())
             <p class="p-4 text-xs text-gray-400">Чатов пока нет.</p>
         @endif
     @endforelse
+    </div>
+
+    @if ($projects->isNotEmpty())
+        <p class="px-4 pb-2 pt-3 text-[11px] leading-snug text-gray-400">
+            Чат можно перетащить мышью в папку проекта или вынести обратно
+            в «Без проекта». То же самое — через три точки справа от названия.
+        </p>
+    @endif
 
     @if ($trashed > 0)
         <a href="{{ route('chat.trash') }}"
@@ -104,3 +124,6 @@
         </a>
     @endif
 </nav>
+
+
+@include('chat.partials.chat-menu', ['projects' => $projects])

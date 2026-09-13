@@ -121,6 +121,42 @@
             @endif
         </div>
 
+        @if ($available->isNotEmpty())
+            <div class="mt-6 rounded-lg border border-gray-200 bg-white p-6">
+                <h2 class="text-sm font-medium text-gray-900">Добавить существующие чаты</h2>
+                <p class="mt-1 text-sm text-gray-600">
+                    Отметьте те, что относятся к этой теме. Переписка сохранится,
+                    просто чат переедет в папку.
+                </p>
+
+                <form method="POST" action="{{ route('projects.attach', $project) }}" class="mt-4">
+                    @csrf
+
+                    <div class="max-h-72 space-y-1 overflow-y-auto rounded-md border border-gray-100 p-2">
+                        @foreach ($available as $item)
+                            <label class="flex items-start gap-2 rounded px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                                <input type="checkbox" name="threads[]" value="{{ $item->id }}"
+                                       class="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="min-w-0">
+                                    <span class="block truncate">{{ $item->title }}</span>
+                                    <span class="block text-xs text-gray-400">
+                                        {{ $item->last_message_at?->diffForHumans() }}
+                                        @if ($item->project_id)
+                                            · сейчас в проекте «{{ $item->project?->name }}»
+                                        @endif
+                                    </span>
+                                </span>
+                            </label>
+                        @endforeach
+                    </div>
+
+                    <button class="mt-4 rounded-md border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50">
+                        Добавить отмеченные
+                    </button>
+                </form>
+            </div>
+        @endif
+
         <div class="mt-6 rounded-lg border border-red-200 bg-white p-6">
             <h2 class="text-sm font-medium text-red-900">Удалить проект</h2>
             <p class="mt-1 text-sm text-gray-600">

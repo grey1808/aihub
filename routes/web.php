@@ -31,6 +31,7 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::post('/projects', [ProjectController::class, 'store'])->name('projects.store');
     Route::get('/projects/{project}', [ProjectController::class, 'show'])->name('projects.show');
     Route::patch('/projects/{project}', [ProjectController::class, 'update'])->name('projects.update');
+    Route::post('/projects/{project}/chats', [ProjectController::class, 'attach'])->name('projects.attach');
     Route::delete('/projects/{project}', [ProjectController::class, 'destroy'])->name('projects.destroy');
 
     Route::post('/attachments', [AttachmentController::class, 'store'])->name('attachments.store');

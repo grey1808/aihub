@@ -133,4 +133,52 @@ class ProjectTest extends TestCase
 
         $this->assertNull($thread->fresh()->project_id);
     }
+
+    public function test_существующие_чаты_добавляются_в_проект_списком(): void
+    {
+        $user = User::factory()->create();
+        $project = $user->projects()->create(['name' => 'Проект']);
+
+        $first = $user->threads()->create(['title' => 'Первый']);
+        $second = $user->threads()->create(['title' => 'Второй']);
+        $untouched = $user->threads()->create(['title' => 'Третий']);
+
+        $this->actingAs($user)
+            ->post(route('projects.attach', $project), ['threads' => [$first->id, $second->id]])
+            ->assertRedirect();
+
+        $this->assertSame($project->id, $first->fresh()->project_id);
+        $this->assertSame($project->id, $second->fresh()->project_id);
+        $this->assertNull($untouched->fresh()->project_id);
+    }
+
+    public function test_чужой_чат_в_свой_проект_списком_не_добавить(): void
+    {
+        $user = User::factory()->create();
+        $stranger = User::factory()->create();
+
+        $project = $user->projects()->create(['name' => 'Проект']);
+        $foreign = $stranger->threads()->create(['title' => 'Чужой']);
+
+        $this->actingAs($user)
+            ->post(route('projects.attach', $project), ['threads' => [$foreign->id]])
+            ->assertRedirect();
+
+        $this->assertNull($foreign->fresh()->project_id);
+    }
+
+    public function test_в_чужой_проект_чаты_не_добавить(): void
+    {
+        $user = User::factory()->create();
+        $stranger = User::factory()->create();
+
+        $foreignProject = $stranger->projects()->create(['name' => 'Чужой проект']);
+        $thread = $user->threads()->create(['title' => 'Свой чат']);
+
+        $this->actingAs($user)
+            ->post(route('projects.attach', $foreignProject), ['threads' => [$thread->id]])
+            ->assertForbidden();
+
+        $this->assertNull($thread->fresh()->project_id);
+    }
 }

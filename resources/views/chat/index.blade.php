@@ -14,6 +14,12 @@
             @include('chat.partials.sidebar')
         </aside>
 
+        {{-- Разделитель: тянется мышью, ширина запоминается в браузере.
+             Двойной щелчок возвращает ширину по умолчанию. --}}
+        <div data-resizer
+             class="hidden w-1 shrink-0 cursor-col-resize bg-gray-200 transition-colors hover:bg-indigo-400 md:block"
+             title="Потяните, чтобы изменить ширину. Двойной щелчок — вернуть как было"></div>
+
         <section class="flex min-h-0 min-w-0 flex-1 flex-col bg-gray-50">
             @if (session('status') || session('error'))
                 <div class="border-b px-4 py-2 text-sm {{ session('error') ? 'border-red-200 bg-red-50 text-red-800' : 'border-green-200 bg-green-50 text-green-800' }}">

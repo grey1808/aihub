@@ -56,6 +56,212 @@ document.addEventListener('click', (event) => {
     if (threadMenu && !threadMenu.contains(event.target)) threadPanel?.classList.add('hidden');
 });
 
+
+/* ------------------------------------------------------------------ */
+/*  Ширина боковой панели                                              */
+/* ------------------------------------------------------------------ */
+
+const resizer = document.querySelector('[data-resizer]');
+const wide = () => window.matchMedia('(min-width: 768px)').matches;
+
+const DEFAULT_WIDTH = 288; // соответствует классу w-72
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 640;
+
+const readWidth = () => {
+    try {
+        const saved = Number(localStorage.getItem('aihub:sidebar-width'));
+        return saved >= MIN_WIDTH && saved <= MAX_WIDTH ? saved : null;
+    } catch {
+        return null; // приватный режим — просто работаем с шириной по умолчанию
+    }
+};
+
+const applyWidth = (width) => {
+    if (!drawer) return;
+
+    // На узком экране панель выезжает поверх содержимого и всегда одной
+    // ширины — заданная мышью ширина там только мешает.
+    drawer.style.width = wide() && width ? width + 'px' : '';
+};
+
+applyWidth(readWidth());
+window.addEventListener('resize', () => applyWidth(readWidth()));
+
+if (resizer && drawer) {
+    let dragging = false;
+
+    const move = (event) => {
+        if (!dragging) return;
+
+        const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, event.clientX - drawer.getBoundingClientRect().left));
+        drawer.style.width = width + 'px';
+    };
+
+    const stop = () => {
+        if (!dragging) return;
+
+        dragging = false;
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+
+        try {
+            localStorage.setItem('aihub:sidebar-width', String(parseInt(drawer.style.width, 10)));
+        } catch { /* не сохранилось — не беда */ }
+    };
+
+    resizer.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        dragging = true;
+        // Пока тянем — гасим выделение текста, иначе страница «подсвечивается».
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+    });
+
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', stop);
+
+    resizer.addEventListener('dblclick', () => {
+        drawer.style.width = '';
+        try {
+            localStorage.removeItem('aihub:sidebar-width');
+        } catch { /* ничего */ }
+    });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Перетаскивание чата в папку проекта                                */
+/* ------------------------------------------------------------------ */
+
+let draggedThread = null;
+
+document.querySelectorAll('[data-thread-id]').forEach((link) => {
+    link.addEventListener('dragstart', (event) => {
+        draggedThread = link.dataset.threadId;
+        event.dataTransfer.effectAllowed = 'move';
+        // Без этого Firefox не начинает перетаскивание вовсе.
+        event.dataTransfer.setData('text/plain', draggedThread);
+        link.classList.add('opacity-40');
+    });
+
+    link.addEventListener('dragend', () => {
+        link.classList.remove('opacity-40');
+        draggedThread = null;
+    });
+});
+
+document.querySelectorAll('[data-drop-project]').forEach((zone) => {
+    const highlight = (on) => {
+        // Через || нельзя: toggle возвращает булево, и второй вызов
+        // пропускался бы, когда первый вернул true.
+        zone.classList.toggle('ring-2', on);
+        zone.classList.toggle('ring-inset', on);
+        zone.classList.toggle('ring-indigo-400', on);
+    };
+
+    zone.addEventListener('dragover', (event) => {
+        if (!draggedThread) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        highlight(true);
+    });
+
+    zone.addEventListener('dragleave', () => highlight(false));
+
+    zone.addEventListener('drop', async (event) => {
+        event.preventDefault();
+        highlight(false);
+
+        const threadId = draggedThread || event.dataTransfer.getData('text/plain');
+        if (!threadId) return;
+
+        try {
+            // Именно PATCH, а не POST с _method: подмена метода читается
+            // из формы, а в теле JSON Laravel её не видит.
+            const response = await fetch('/chat/' + threadId + '/move', {
+                method: 'PATCH',
+                headers: {
+                    'X-CSRF-TOKEN': csrf,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ project_id: zone.dataset.dropProject || null }),
+            });
+
+            if (!response.ok) throw new Error('код ' + response.status);
+
+            // Перечитываем страницу: так список папок и счётчики
+            // гарантированно совпадают с тем, что в базе.
+            window.location.reload();
+        } catch (error) {
+            alert('Не удалось перенести чат: ' + error.message);
+        }
+    });
+});
+
+
+/* ------------------------------------------------------------------ */
+/*  Меню действий у чата в боковой панели                              */
+/* ------------------------------------------------------------------ */
+
+const chatActions = document.querySelector('[data-chat-actions]');
+
+if (chatActions) {
+    const renameForm = chatActions.querySelector('[data-form="rename"]');
+    const moveForm = chatActions.querySelector('[data-form="move"]');
+    const deleteForm = chatActions.querySelector('[data-form="delete"]');
+    const titleInput = chatActions.querySelector('[data-title]');
+    const projectSelect = chatActions.querySelector('[data-project]');
+
+    const closeActions = () => chatActions.classList.add('hidden');
+
+    document.querySelectorAll('[data-chat-menu]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const id = button.dataset.chatMenu;
+
+            renameForm.action = '/chat/' + id;
+            moveForm.action = '/chat/' + id + '/move';
+            deleteForm.action = '/chat/' + id;
+
+            titleInput.value = button.dataset.chatTitle || '';
+            projectSelect.value = button.dataset.chatProject || '';
+
+            deleteForm.onsubmit = () =>
+                confirm('Удалить чат «' + (button.dataset.chatTitle || '') + '»? Его можно будет вернуть из корзины.');
+
+            // Показываем до замера: у скрытого элемента нет размеров.
+            chatActions.classList.remove('hidden');
+
+            const rect = button.getBoundingClientRect();
+            const box = chatActions.getBoundingClientRect();
+
+            // Прижимаем к кнопке, но не даём вылезти за край экрана.
+            const left = Math.min(rect.right + 6, window.innerWidth - box.width - 8);
+            const top = Math.min(rect.top, window.innerHeight - box.height - 8);
+
+            chatActions.style.left = Math.max(8, left) + 'px';
+            chatActions.style.top = Math.max(8, top) + 'px';
+
+            titleInput.focus();
+            titleInput.select();
+        });
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!chatActions.contains(event.target)) closeActions();
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeActions();
+    });
+
+    // Панель со списком чатов прокручивается — меню уехало бы от кнопки.
+    document.querySelector('[data-drawer] nav')?.addEventListener('scroll', closeActions);
+}
+
 /* Дальше — только если на странице есть открытый чат. */
 if (form) {
     const input = document.getElementById('message');
