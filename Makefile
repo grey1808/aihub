@@ -49,6 +49,9 @@ assets-docker: ## То же, но через контейнер Node — есл�
 	docker run --rm -u $$(id -u):$$(id -g) -v "$$PWD":/app -w /app node:20-alpine \
 		sh -c "npm ci --no-audit --no-fund && npm run build"
 
+bench: ## Сравнить модели: скорость и умение вызывать инструменты
+	$(DC) exec app php artisan aihub:bench $(ARGS)
+
 check: ## Проверить машину перед установкой (ничего не меняет)
 	bash deploy/check-machine.sh
 
@@ -66,4 +69,4 @@ models: ## Скачать модели в Ollama (нужен интернет)
 	$(DC) exec ollama ollama pull $$(grep '^LLM_MODEL=' .env | cut -d= -f2)
 	$(DC) exec ollama ollama pull $$(grep '^LLM_EMBEDDING_MODEL=' .env | cut -d= -f2)
 
-.PHONY: help up down restart build logs shell diagnose migrate sync reindex test assets assets-docker check deploy https models
+.PHONY: help up down restart build logs shell diagnose migrate sync reindex test assets assets-docker bench check deploy https models
