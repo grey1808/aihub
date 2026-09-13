@@ -11,10 +11,24 @@
 # Результат: файл aihub-check-<дата>.txt рядом со скриптом.
 # Его нужно отправить разработчику.
 #
+# Если скрипт запустили через sh, перезапускаем себя в bash:
+# ниже используются возможности, которых в sh нет.
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
+
 set -uo pipefail
 
-REPORT="aihub-check-$(date +%Y%m%d-%H%M).txt"
-: > "$REPORT"
+# Отчёт кладём туда, куда получится записать: текущая папка бывает
+# только для чтения, и тогда скрипт молча падал бы в самом начале.
+for dir in "$PWD" "$HOME" /tmp; do
+    if [ -w "$dir" ]; then
+        REPORT="$dir/aihub-check-$(date +%Y%m%d-%H%M).txt"
+        break
+    fi
+done
+
+: > "$REPORT" 2>/dev/null || { echo "Не удалось создать файл отчёта."; exit 1; }
 
 say()  { echo "$*" | tee -a "$REPORT"; }
 head2() { say ""; say "=== $* ==="; }
