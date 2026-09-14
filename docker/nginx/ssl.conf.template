@@ -31,6 +31,13 @@ server {
     location ~ \.php$ {
         fastcgi_pass app:9000;
         fastcgi_buffering off;
+
+        # Не обрывать запрос к приложению, когда браузер закрыл вкладку.
+        # Ответ модели считается десятки секунд, и человек вполне может
+        # уйти на полпути. Без этого nginx закрывает соединение с php-fpm,
+        # скрипт умирает до сохранения — и в переписке остаётся вопрос
+        # без ответа, хотя модель ответ уже придумала.
+        fastcgi_ignore_client_abort on;
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;

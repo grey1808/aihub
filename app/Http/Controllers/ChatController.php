@@ -198,6 +198,13 @@ class ChatController extends Controller
         $questionHtml = view('chat.partials.message', ['message' => $message->load('attachments')])->render();
 
         return response()->stream(function () use ($thread, $text, $attachments, $agent, $questionHtml) {
+            // Досчитываем ответ, даже если человек закрыл вкладку или обновил
+            // страницу. Иначе PHP убивает скрипт на первой же попытке что-то
+            // отправить, ответ не успевает сохраниться, и в переписке остаётся
+            // вопрос без ответа. Модель на той стороне всё равно продолжает
+            // считать, так что прерывать нас смысла нет — только терять работу.
+            ignore_user_abort(true);
+
             $send = function (string $event, array $data) {
                 echo 'event: '.$event."\n";
                 echo 'data: '.json_encode($data, JSON_UNESCAPED_UNICODE)."\n\n";
