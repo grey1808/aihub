@@ -65,6 +65,12 @@ class DiagnoseCommand extends Command
                 $this->line('  вектора считает отдельный сервис: '.$ping['embedding_base_url']);
             }
 
+            // Показываем действующие настройки, а не те, что в .env: правки
+            // в .env подхватываются только при пересоздании контейнера,
+            // и «поменял, но ничего не изменилось» — обычное дело.
+            $this->line('  размышления вслух: '.(config('llm.thinking') ? 'включены' : 'выключены'));
+            $this->line('  лимит ответа: '.config('llm.max_tokens').' токенов');
+
             $ping['embed_model_loaded']
                 ? $this->info("  модель для векторов «{$embed}» — на месте")
                 : $this->error("  модель для векторов «{$embed}» НЕ загружена по адресу "
@@ -134,7 +140,9 @@ class DiagnoseCommand extends Command
                         $this->warn("  модель ответила за {$seconds} с — долго для вопроса из двух слов");
                         $this->line('     Похоже, модель размышляет вслух. На сложных вопросах это');
                         $this->line('     полезно, на простых — просто ожидание.');
-                        $this->line('     Выключить: LLM_THINKING=false в .env');
+                        $this->line('     Выключить: LLM_THINKING=false в .env, затем');
+                        $this->line('     docker compose up -d --force-recreate app worker scheduler');
+                        $this->line('     Обычного restart мало: переменные читаются при создании.');
                         $this->optional[] = "ответ занял {$seconds} с — возможно, стоит выключить размышления";
                     } elseif ($ms > 30000) {
                         // Несколько секунд — нормально. Минуты на короткий
