@@ -119,6 +119,36 @@ class DiagnoseCommand extends Command
             }
         }
 
+        // Размер окна проверяем отдельно: модель может быть загружена
+        // и отвечать, но с окном, в которое найденные документы не влезают.
+        $contexts = $llm->contextLengths();
+
+        if ($contexts !== []) {
+            $this->line('');
+            $this->line('<comment>Окно контекста</comment>');
+
+            // Грубая оценка: сколько токенов уйдёт на найденные документы
+            // плюс системное сообщение, история и сам вопрос.
+            $needed = (int) (config('rag.top_k') * config('rag.chunk_size') / 3) + 2500;
+
+            foreach ($contexts as $name => $length) {
+                if (str_contains($name, (string) config('llm.embedding_model'))) {
+                    continue; // модели векторов большое окно не нужно
+                }
+
+                if ($length >= $needed) {
+                    $this->info("  {$name}: {$length} токенов — хватает");
+                } else {
+                    $this->error("  {$name}: всего {$length} токенов, а нужно около {$needed}");
+                    $this->line('     Найденные документы в это окно не поместятся и будут обрезаны.');
+                    $this->line('     Модель начнёт отвечать «из головы», как будто документов нет.');
+                    $this->line('     Лечится переменной OLLAMA_CONTEXT_LENGTH в .env и пересозданием:');
+                    $this->line('     docker compose up -d --force-recreate ollama');
+                    $ok = false;
+                }
+            }
+        }
+
         $this->line('');
         $this->line('<comment>Драйверы подключения к чужим базам</comment>');
 

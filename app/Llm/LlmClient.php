@@ -420,6 +420,47 @@ class LlmClient
         )));
     }
 
+    /**
+     * Сколько текста модель видит за раз — по данным самой Ollama.
+     *
+     * Спрашиваем не из любопытства: по умолчанию окно 4096 токенов,
+     * и найденные документы туда не помещаются. Лишнее обрезается молча,
+     * и выглядит это как «модель не видит документы».
+     *
+     * У LM Studio такого запроса нет — там вернём null.
+     *
+     * @return array<string, int>  модель => размер окна
+     */
+    public function contextLengths(): array
+    {
+        if (config('llm.driver') !== 'ollama') {
+            return [];
+        }
+
+        // Нативный адрес Ollama лежит рядом с OpenAI-совместимым: /v1 убираем.
+        $base = preg_replace('#/v1/?$#', '', $this->baseUrl());
+
+        try {
+            $response = Http::baseUrl($base)->timeout(10)->get('/api/ps');
+        } catch (\Throwable) {
+            return [];
+        }
+
+        if ($response->failed()) {
+            return [];
+        }
+
+        $result = [];
+
+        foreach ($response->json('models') ?? [] as $model) {
+            if (isset($model['name'], $model['context_length'])) {
+                $result[$model['name']] = (int) $model['context_length'];
+            }
+        }
+
+        return $result;
+    }
+
     /** Жив ли рантайм. Используется на странице диагностики в админке. */
     public function ping(): array
     {
