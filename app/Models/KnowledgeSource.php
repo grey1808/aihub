@@ -15,6 +15,13 @@ class KnowledgeSource extends Model
 
     protected $fillable = [
         'name', 'type', 'description', 'is_enabled', 'config', 'sync_interval_minutes',
+
+        // Поля состояния тоже заполняемые: их пишет синхронизатор через
+        // update(), и без этого они молча отбрасывались. Последствие было
+        // тяжёлым: last_synced_at оставался пустым, источник считался
+        // просроченным всегда, и планировщик переиндексировал его каждые
+        // пять минут без остановки.
+        'last_synced_at', 'last_status', 'last_error', 'documents_count',
     ];
 
     protected $casts = [

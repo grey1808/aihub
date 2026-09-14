@@ -369,6 +369,27 @@ class DiagnoseCommand extends Command
         $this->line('  с ошибкой индексации: '.Document::where('index_status', 'failed')->count());
         $this->line('  фрагментов с векторами: '.DB::table('document_chunks')->whereNotNull('embedding')->count());
 
+        // Источник заведён, а документов нет — значит синхронизацию
+        // ни разу не запускали. Помощник при этом честно отвечает,
+        // что ничего не нашёл, и выглядит это как поломка.
+        $neverSynced = KnowledgeSource::where('is_enabled', true)->whereNull('last_synced_at')->count();
+
+        if ($neverSynced > 0) {
+            $this->line('');
+            $this->warn("  источников без единой синхронизации: {$neverSynced}");
+            $this->line('     Документы ещё не загружены, и помощник их не найдёт.');
+            $this->line('     В админке откройте источник и нажмите «Синхронизировать сейчас»,');
+            $this->line('     либо из консоли: docker compose exec app php artisan knowledge:sync');
+            $this->optional[] = 'есть источники, которые ни разу не синхронизировались';
+        }
+
+        $failedSources = KnowledgeSource::where('last_status', 'error')->get();
+
+        foreach ($failedSources as $failed) {
+            $this->error("  источник «{$failed->name}» с ошибкой: ".\Illuminate\Support\Str::limit($failed->last_error, 120));
+            $this->optional[] = "источник «{$failed->name}» не синхронизируется";
+        }
+
         $this->line('');
         $this->line('<comment>Очередь</comment>');
         $this->line('  задач в ожидании: '.DB::table('jobs')->count());
