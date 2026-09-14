@@ -64,6 +64,13 @@ TXT;
             $parts[] = $this->memoryCard($user);
         }
 
+        // Команда для Qwen3 и родственных моделей: отвечать сразу,
+        // без размышлений вслух. Модели, которые её не знают, просто
+        // не обратят внимания.
+        if (! config('llm.thinking')) {
+            $parts[] = '/no_think';
+        }
+
         return implode("\n\n", $parts);
     }
 
