@@ -19,9 +19,14 @@ class DiagnoseCommand extends Command
 
     protected $description = 'Проверить, что база, очередь и нейросеть на месте';
 
+    /** @var array<int, string> то, без чего помощник не работает */
+    private array $critical = [];
+
+    /** @var array<int, string> то, что просто выключено или не настроено */
+    private array $optional = [];
+
     public function handle(LlmClient $llm, SpeechToText $speech): int
     {
-        $ok = true;
 
         $this->line('');
         $this->line('<comment>База данных</comment>');
@@ -34,7 +39,7 @@ class DiagnoseCommand extends Command
             $this->info('  расширение pgvector — установлено');
         } catch (\Throwable $e) {
             $this->error('  ошибка: '.$e->getMessage());
-            $ok = false;
+            $this->critical[] = 'база данных недоступна или нет расширения pgvector';
         }
 
         $this->line('');
@@ -45,7 +50,7 @@ class DiagnoseCommand extends Command
 
         if (! $ping['ok']) {
             $this->error('  недоступна: '.($ping['error'] ?? 'неизвестная ошибка'));
-            $ok = false;
+            $this->critical[] = 'нейросеть не отвечает по адресу '.$ping['base_url'];
         } else {
             $this->info('  отвечает, моделей загружено: '.count($ping['models']));
 
@@ -65,7 +70,13 @@ class DiagnoseCommand extends Command
                 : $this->error("  модель для векторов «{$embed}» НЕ загружена по адресу "
                               .($ping['embedding_base_url'] ?? '').". Загрузите её там.");
 
-            $ok = $ok && $ping['chat_model_loaded'] && $ping['embed_model_loaded'];
+            if (! $ping['chat_model_loaded']) {
+                $this->critical[] = 'модель для диалога «'.$chat.'» не загружена';
+            }
+
+            if (! $ping['embed_model_loaded']) {
+                $this->critical[] = 'модель для векторов «'.$embed.'» не загружена';
+            }
         }
 
         // Мало знать, что модель в списке: она может быть не той, битой
@@ -96,7 +107,7 @@ class DiagnoseCommand extends Command
                 $this->error('  вектор посчитать не удалось: '.$e->getMessage());
                 $this->line('     Без этого база знаний не заработает: поиск по документам');
                 $this->line('     держится именно на векторах.');
-                $ok = false;
+                $this->critical[] = 'вектора не считаются';
             }
 
             try {
@@ -118,11 +129,11 @@ class DiagnoseCommand extends Command
                     $this->line('     Связь есть. Если такое повторяется в чате — увеличьте LLM_MAX_TOKENS.');
                 } else {
                     $this->error("  модель вернула пустой ответ за {$ms} мс.");
-                    $ok = false;
+                    $this->critical[] = 'модель не отвечает';
                 }
             } catch (\Throwable $e) {
                 $this->error('  модель не ответила: '.$e->getMessage());
-                $ok = false;
+                $this->critical[] = 'модель не отвечает: '.$e->getMessage();
             }
         }
 
@@ -151,7 +162,7 @@ class DiagnoseCommand extends Command
                     $this->line('     Модель начнёт отвечать «из головы», как будто документов нет.');
                     $this->line('     Лечится переменной OLLAMA_CONTEXT_LENGTH в .env и пересозданием:');
                     $this->line('     docker compose up -d --force-recreate ollama');
-                    $ok = false;
+                    $this->critical[] = "окно контекста мало ({$length} вместо {$needed}) — документы обрезаются";
                 }
             }
         }
@@ -163,7 +174,7 @@ class DiagnoseCommand extends Command
 
         in_array('pgsql', $drivers, true)
             ? $this->info('  PostgreSQL: есть')
-            : $this->error('  PostgreSQL: НЕТ — это обязательный драйвер');
+            : $this->critical[] = 'нет драйвера PostgreSQL';
 
         if (in_array('sqlsrv', $drivers, true)) {
             $this->info('  Microsoft SQL Server: есть — базу 1С на MS SQL подключить можно');
@@ -184,23 +195,28 @@ class DiagnoseCommand extends Command
         if ($vision === '') {
             $this->warn('  зрение: модель не указана — картинки принимаются, но помощник их не видит');
             $this->line('     чтобы включить: ollama pull qwen2.5vl:7b, затем LLM_VISION_MODEL=qwen2.5vl:7b в .env');
+            $this->optional[] = 'картинки помощник не видит (не указана модель со зрением)';
         } elseif (! empty($ping['models']) && $this->modelListed($vision, $ping['models'])) {
             $this->info("  зрение: модель «{$vision}» — на месте");
         } else {
-            $this->error("  зрение: модель «{$vision}» указана, но НЕ загружена. Выполните: ollama pull {$vision}");
-            $ok = false;
+            $this->warn("  зрение: модель «{$vision}» указана, но НЕ загружена. Выполните: ollama pull {$vision}");
+            $this->optional[] = "модель со зрением «{$vision}» указана, но не загружена";
         }
 
         $stt = $speech->ping();
 
         if (! config('attachments.stt.enabled')) {
             $this->warn('  голос: распознавание выключено (STT_ENABLED=false)');
+            $this->optional[] = 'голосовые сообщения выключены';
         } elseif ($stt['ok']) {
             $this->info('  голос: сервис распознавания отвечает ('.config('attachments.stt.model').')');
         } else {
-            $this->error('  голос: сервис распознавания недоступен — '.($stt['error'] ?? ''));
-            $this->line('     запустить: docker compose --profile with-whisper up -d');
-            $ok = false;
+            // Это не поломка: сервис распознавания поднимается отдельным
+            // профилем и нужен только для голосовых. Всё остальное работает.
+            $this->warn('  голос: сервис распознавания не запущен');
+            $this->line('     Голосовые сообщения работать не будут, на остальное не влияет.');
+            $this->line('     Запустить: docker compose --profile with-whisper up -d');
+            $this->optional[] = 'голосовые сообщения недоступны (не запущен whisper)';
         }
 
         $this->line('  вложений сохранено: '.\App\Models\ChatAttachment::count()
@@ -220,8 +236,33 @@ class DiagnoseCommand extends Command
         $this->line('  упавших задач: '.DB::table('failed_jobs')->count());
 
         $this->line('');
+        $this->line('<comment>Итог</comment>');
 
-        return $ok ? self::SUCCESS : self::FAILURE;
+        if ($this->critical !== []) {
+            $this->error('  Помощник работать не будет. Причины:');
+
+            foreach ($this->critical as $problem) {
+                $this->line('    — '.$problem);
+            }
+        } else {
+            $this->info('  Всё необходимое на месте, помощник готов отвечать.');
+        }
+
+        if ($this->optional !== []) {
+            $this->line('');
+            $this->warn('  Выключено или не настроено (на работу чата не влияет):');
+
+            foreach ($this->optional as $problem) {
+                $this->line('    — '.$problem);
+            }
+        }
+
+        $this->line('');
+
+        // Код возврата — только по критичным пунктам. Иначе make печатает
+        // «Ошибка 1» из-за незапущенного распознавания речи, и оператор
+        // думает, что сломалось всё.
+        return $this->critical === [] ? self::SUCCESS : self::FAILURE;
     }
 
     /** Ollama отдаёт модели с тегом «:latest» — сравниваем без него. */

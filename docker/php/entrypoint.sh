@@ -47,7 +47,10 @@ if [ "${CONTAINER_ROLE:-app}" = "app" ]; then
         php artisan optimize:clear
     fi
 
-    php artisan storage:link 2>/dev/null || true
+    # --force и полное молчание: без этого при каждом запуске в логах
+    # появляется красное «ERROR: link already exists», хотя это не ошибка,
+    # а ровно то, чего мы и ждём на втором запуске.
+    php artisan storage:link --force >/dev/null 2>&1 || true
 
     # Прогреваем модели в фоне: первый запрос поднимает модель с диска
     # в память, и для большой модели это десятки секунд. Пусть это время
