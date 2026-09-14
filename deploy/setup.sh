@@ -101,14 +101,23 @@ fi
 step "Прогреваем модели"
 $DC exec -T app php artisan aihub:warmup --quiet-fail || true
 
-step "Проверяем состояние"
-$DC exec -T app php artisan aihub:diagnose
-CODE=$?
+# Полная проверка спрашивает модель по-настоящему, а это десятки секунд.
+# При каждом запуске столько ждать незачем — включается по требованию:
+#   make up CHECK=1
+CODE=0
+
+if [ "${CHECK:-}" = "1" ]; then
+    step "Проверяем состояние"
+    $DC exec -T app php artisan aihub:diagnose
+    CODE=$?
+fi
 
 echo
 if [ $CODE -eq 0 ]; then
     green "Готово. Помощник доступен: ${APP_URL:-http://localhost:8080}"
     green "Вход администратора: ${ADMIN_LOGIN:-admin} / ${ADMIN_PASSWORD:-admin}"
+
+    [ "${CHECK:-}" = "1" ] || echo "Полная проверка при необходимости: make diagnose"
 else
     yellow "Есть незакрытые пункты — смотрите раздел «Итог» выше."
 fi
