@@ -374,6 +374,27 @@ class DiagnoseCommand extends Command
         $this->line('  задач в ожидании: '.DB::table('jobs')->count());
         $this->line('  упавших задач: '.DB::table('failed_jobs')->count());
 
+        // .env создаётся один раз и дальше живёт своей жизнью: git pull
+        // приносит новые настройки в .env.example, но чужой .env не трогает.
+        // Из-за этого «поменял настройку, а её там и не было» — обычное дело.
+        $missing = $this->missingSettings();
+
+        if ($missing !== []) {
+            $this->line('');
+            $this->line('<comment>Новые настройки, которых нет в вашем .env</comment>');
+
+            foreach ($missing as $key => $default) {
+                $this->line("  {$key}={$default}");
+            }
+
+            $this->line('');
+            $this->line('  Появились в обновлениях. Сейчас действуют значения по умолчанию.');
+            $this->line('  Чтобы поменять — допишите нужные строки в .env и пересоздайте:');
+            $this->line('  docker compose up -d --force-recreate app worker scheduler');
+
+            $this->optional[] = 'в .env нет новых настроек: '.implode(', ', array_keys($missing));
+        }
+
         $this->line('');
         $this->line('<comment>Итог</comment>');
 
@@ -402,6 +423,35 @@ class DiagnoseCommand extends Command
         // «Ошибка 1» из-за незапущенного распознавания речи, и оператор
         // думает, что сломалось всё.
         return $this->critical === [] ? self::SUCCESS : self::FAILURE;
+    }
+
+    /**
+     * Настройки, которые появились в .env.example, но отсутствуют в .env.
+     *
+     * @return array<string, string>  переменная => значение из примера
+     */
+    private function missingSettings(): array
+    {
+        $examplePath = base_path('.env.example');
+        $envPath = base_path('.env');
+
+        if (! is_readable($examplePath) || ! is_readable($envPath)) {
+            return [];
+        }
+
+        $keys = function (string $path): array {
+            $result = [];
+
+            foreach (file($path, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+                if (preg_match('/^\s*([A-Z][A-Z0-9_]*)\s*=(.*)$/', $line, $m)) {
+                    $result[$m[1]] = trim($m[2]);
+                }
+            }
+
+            return $result;
+        };
+
+        return array_diff_key($keys($examplePath), $keys($envPath));
     }
 
     /** Ollama отдаёт модели с тегом «:latest» — сравниваем без него. */
