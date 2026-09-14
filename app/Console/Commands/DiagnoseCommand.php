@@ -215,6 +215,35 @@ class DiagnoseCommand extends Command
             }
         }
 
+        // У LM Studio окно контекста и число параллельных слотов задаются
+        // при загрузке модели в её же интерфейсе — снаружи их не узнать.
+        // Напоминаем, потому что грабли там ровно те же, что у Ollama.
+        if (config('llm.driver') === 'lmstudio') {
+            $this->line('');
+            $this->line('<comment>Проверьте в LM Studio вручную</comment>');
+
+            // Оба драйвера читают одну переменную LLM_BASE_URL. Поменять
+            // LLM_DRIVER и забыть про адрес — очень лёгкая ошибка, после
+            // которой приложение продолжает говорить со старым рантаймом,
+            // и понять это по поведению почти невозможно.
+            if (str_contains($llm->baseUrl(), '//ollama:')) {
+                $this->error('  Драйвер lmstudio, а адрес указывает на контейнер Ollama:');
+                $this->error('  '.$llm->baseUrl());
+                $this->line('     Поправьте LLM_BASE_URL, обычно это:');
+                $this->line('     LLM_BASE_URL=http://host.docker.internal:1234/v1');
+                $this->critical[] = 'выбран LM Studio, а адрес ведёт в контейнер Ollama';
+            }
+
+            $this->line('  1. Сервер включён и слушает сеть, а не только сам себя');
+            $this->line('     (в LM Studio: Developer → Serve on Local Network).');
+            $this->line('     Без этого приложение из контейнера до неё не достучится.');
+            $this->line('  2. Context Length при загрузке модели — не меньше '
+                       .((int) (config('rag.top_k') * config('rag.chunk_size') / 3) + 2500)
+                       .' токенов,');
+            $this->line('     иначе найденные документы обрежутся и помощник их не увидит.');
+            $this->line('  3. Число параллельных запросов — 2 и больше, если сотрудников несколько.');
+        }
+
         $contexts = $llm->contextLengths();
 
         if ($contexts !== []) {
