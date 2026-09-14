@@ -1,0 +1,28 @@
+# Доступ Ollama к видеокарте AMD.
+#
+# Без этого файла Ollama в контейнере считает процессором: для модели
+# на 30 миллиардов параметров это разница между ответом за десять секунд
+# и за шесть минут.
+#
+# Использование:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile with-ollama up -d
+# или просто:
+#   make up GPU=amd
+#
+# Требуется установленный на хосте драйвер amdgpu с поддержкой ROCm
+# и наличие устройств /dev/kfd и /dev/dri.
+
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    environment:
+      # Встроенная графика Ryzen AI Max (Radeon 8060S) — это gfx1151.
+      # Если сборка ROCm её ещё не знает, переменная заставляет считать
+      # её совместимой с gfx1100. Убрать, если и без неё работает.
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-11.5.1}

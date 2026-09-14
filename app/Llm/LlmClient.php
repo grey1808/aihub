@@ -433,6 +433,20 @@ class LlmClient
      */
     public function contextLengths(): array
     {
+        return array_map(fn (array $m) => $m['context_length'], $this->loadedModels());
+    }
+
+    /**
+     * Что сейчас загружено в Ollama и чем считается.
+     *
+     * Поле size_vram — самое ценное: ноль означает, что модель молотится
+     * на процессоре. Для модели на 30 миллиардов параметров это разница
+     * между «ответ за 10 секунд» и «ответ за 6 минут».
+     *
+     * @return array<string, array{context_length:int,size:int,size_vram:int}>
+     */
+    public function loadedModels(): array
+    {
         if (config('llm.driver') !== 'ollama') {
             return [];
         }
@@ -453,9 +467,15 @@ class LlmClient
         $result = [];
 
         foreach ($response->json('models') ?? [] as $model) {
-            if (isset($model['name'], $model['context_length'])) {
-                $result[$model['name']] = (int) $model['context_length'];
+            if (! isset($model['name'])) {
+                continue;
             }
+
+            $result[$model['name']] = [
+                'context_length' => (int) ($model['context_length'] ?? 0),
+                'size'           => (int) ($model['size'] ?? 0),
+                'size_vram'      => (int) ($model['size_vram'] ?? 0),
+            ];
         }
 
         return $result;

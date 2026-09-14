@@ -8,8 +8,8 @@ DCO := docker compose --profile with-ollama
 help: ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-up: ## Поднять приложение (вместе с Ollama)
-	$(DCO) up -d
+up: ## Поднять всё: сервисы, модели, прогрев и проверку. GPU=amd — с видеокартой
+	@GPU=$(GPU) bash deploy/setup.sh || true
 
 down: ## Остановить всё
 	$(DCO) down
