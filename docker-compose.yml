@@ -62,6 +62,12 @@ services:
     env_file: .env
     environment:
       CONTAINER_ROLE: worker
+    extra_hosts:
+      # Чтобы достучаться до нейросети, запущенной на самом компьютере,
+      # а не в контейнере: LM Studio или Ollama, поставленная в систему.
+      # Нужно не только приложению: индексацией документов занимается
+      # worker, и вектора считает тоже он.
+      - "host.docker.internal:host-gateway"
     command: php artisan queue:work --queue=sync,index,default --sleep=3 --tries=3 --timeout=7200 --max-time=3600
     volumes:
       - .:/var/www
@@ -87,6 +93,12 @@ services:
     env_file: .env
     environment:
       CONTAINER_ROLE: scheduler
+    extra_hosts:
+      # Чтобы достучаться до нейросети, запущенной на самом компьютере,
+      # а не в контейнере: LM Studio или Ollama, поставленная в систему.
+      # Нужно не только приложению: индексацией документов занимается
+      # worker, и вектора считает тоже он.
+      - "host.docker.internal:host-gateway"
     command: php artisan schedule:work
     volumes:
       - .:/var/www

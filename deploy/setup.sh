@@ -26,10 +26,16 @@ set -a; source .env; set +a
 FILES="-f docker-compose.yml"
 PROFILES=""
 
-# Ollama поднимаем, если через неё идёт диалог или считаются вектора.
+# Контейнер с Ollama поднимаем, только если адреса указывают именно на него.
+# Ollama, поставленная прямо в систему, живёт по адресу host.docker.internal —
+# тогда контейнер не нужен и запускать его незачем.
 NEED_OLLAMA=no
-[ "${LLM_DRIVER:-ollama}" = "ollama" ] && NEED_OLLAMA=yes
-case "${LLM_EMBEDDING_BASE_URL:-}" in *ollama*) NEED_OLLAMA=yes ;; esac
+case "${LLM_BASE_URL:-}" in *//ollama:*) NEED_OLLAMA=yes ;; esac
+case "${LLM_EMBEDDING_BASE_URL:-}" in *//ollama:*) NEED_OLLAMA=yes ;; esac
+
+# Адрес не задан вовсе — значит действует значение по умолчанию, а оно
+# указывает на контейнер.
+[ -z "${LLM_BASE_URL:-}" ] && [ "${LLM_DRIVER:-ollama}" = "ollama" ] && NEED_OLLAMA=yes
 
 [ "$NEED_OLLAMA" = yes ] && PROFILES="$PROFILES --profile with-ollama"
 [ "${STT_ENABLED:-true}" = "true" ] && PROFILES="$PROFILES --profile with-whisper"
@@ -73,15 +79,24 @@ if [ "$NEED_OLLAMA" = yes ]; then
         $DC exec -T ollama ollama pull "$model" || yellow "  не удалось скачать «$model»"
     }
 
-    [ "${LLM_DRIVER:-ollama}" = "ollama" ] && pull_if_missing "${LLM_MODEL:-}" "модель для диалога"
-    case "${LLM_EMBEDDING_BASE_URL:-}" in
-        *ollama*) pull_if_missing "${LLM_EMBEDDING_MODEL:-}" "модель для векторов" ;;
-        "")       [ "${LLM_DRIVER:-ollama}" = "ollama" ] && pull_if_missing "${LLM_EMBEDDING_MODEL:-}" "модель для векторов" ;;
+    case "${LLM_BASE_URL:-}" in
+        *//ollama:*|"") pull_if_missing "${LLM_MODEL:-}" "модель для диалога" ;;
     esac
+
+    case "${LLM_EMBEDDING_BASE_URL:-}" in
+        *//ollama:*|"") pull_if_missing "${LLM_EMBEDDING_MODEL:-}" "модель для векторов" ;;
+    esac
+
     pull_if_missing "${LLM_VISION_MODEL:-}" "модель со зрением"
 fi
 
 # --- приложение -----------------------------------------------------------
+
+if [ "$NEED_OLLAMA" = no ]; then
+    yellow "Нейросеть запущена вне контейнеров — контейнер ollama не поднимаем."
+    yellow "Модели в неё нужно докачивать самостоятельно, например:"
+    yellow "  ollama pull ${LLM_MODEL:-<модель>}"
+fi
 
 step "Прогреваем модели"
 $DC exec -T app php artisan aihub:warmup --quiet-fail || true
