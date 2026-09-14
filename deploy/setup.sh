@@ -112,14 +112,64 @@ if [ "${CHECK:-}" = "1" ]; then
     CODE=$?
 fi
 
-echo
-if [ $CODE -eq 0 ]; then
-    green "Готово. Помощник доступен: ${APP_URL:-http://localhost:8080}"
-    green "Вход администратора: ${ADMIN_LOGIN:-admin} / ${ADMIN_PASSWORD:-admin}"
+# Адрес машины в сети: сотрудники заходят по нему, а не по localhost.
+# Виртуальные интерфейсы докера и туннели отбрасываем — их адреса
+# снаружи недоступны и только путают.
+LOCAL_IP="localhost"
 
-    [ "${CHECK:-}" = "1" ] || echo "Полная проверка при необходимости: make diagnose"
-else
+if command -v ip >/dev/null 2>&1; then
+    DETECTED="$(ip -4 addr show scope global 2>/dev/null \
+        | grep -vE 'tun[0-9]|tap[0-9]|docker|br-|veth|virbr' \
+        | awk '/inet /{split($2,a,"/"); if (a[1] != "127.0.0.1") print a[1]}' \
+        | head -1)"
+
+    [ -n "$DETECTED" ] && LOCAL_IP="$DETECTED"
+fi
+
+line() { printf '%s\n' "============================================================"; }
+
+echo
+if [ $CODE -ne 0 ]; then
     yellow "Есть незакрытые пункты — смотрите раздел «Итог» выше."
+    echo
+fi
+
+line
+echo "  Помощник запущен. Открывайте в браузере:"
+line
+echo
+# Выравниваем подписи вручную: printf с %-14s считает байты, а в кириллице
+# на символ приходится два — из-за этого столбик разъезжается.
+# ${#переменная} в bash считает именно символы.
+row() {
+    local label="$1" value="$2" pad="" len=${#1}
+
+    while [ "$len" -lt 12 ]; do
+        pad="$pad "
+        len=$((len + 1))
+    done
+
+    printf '  %s%s %s\n' "$label" "$pad" "$value"
+}
+
+row "Приложение:" "http://${LOCAL_IP}:${APP_PORT:-8080}"
+
+if [ "${ENABLE_HTTPS:-false}" = "true" ]; then
+    row "По HTTPS:" "https://${LOCAL_IP}:${APP_SSL_PORT:-8443}"
+    row "" "(нужен для записи голосовых с телефонов)"
+fi
+
+row "Админка:" "http://${LOCAL_IP}:${APP_PORT:-8080}/admin"
+echo
+row "Вход:" "${ADMIN_LOGIN:-admin} / ${ADMIN_PASSWORD:-admin}"
+row "Нейросеть:" "${LLM_MODEL:-не указана} (${LLM_DRIVER:-ollama})"
+row "Документы:" "${DOCUMENTS_PATH:-не указана} → в приложении /data/documents"
+echo
+line
+
+if [ "${CHECK:-}" != "1" ]; then
+    echo "  Полная проверка при необходимости: make diagnose"
+    line
 fi
 
 exit $CODE
