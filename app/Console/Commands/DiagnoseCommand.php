@@ -68,6 +68,57 @@ class DiagnoseCommand extends Command
             $ok = $ok && $ping['chat_model_loaded'] && $ping['embed_model_loaded'];
         }
 
+        // Мало знать, что модель в списке: она может быть не той, битой
+        // или отдавать вектор другой длины. Проверяем живым вызовом —
+        // именно на этом обычно и спотыкаются при первом запуске.
+        if ($ping['ok']) {
+            $this->line('');
+            $this->line('<comment>Живая проверка</comment>');
+
+            try {
+                $startedAt = microtime(true);
+                $vector = $llm->embed(['проверка связи'])[0] ?? [];
+                $ms = (int) ((microtime(true) - $startedAt) * 1000);
+
+                $this->info(sprintf(
+                    '  вектор посчитан: длина %d, за %d мс',
+                    count($vector),
+                    $ms
+                ));
+            } catch (\Throwable $e) {
+                $this->error('  вектор посчитать не удалось: '.$e->getMessage());
+                $this->line('     Без этого база знаний не заработает: поиск по документам');
+                $this->line('     держится именно на векторах.');
+                $ok = false;
+            }
+
+            try {
+                $startedAt = microtime(true);
+                // Лимит с запасом: рассуждающие модели сначала думают,
+                // и на коротком лимите весь ответ уходит в рассуждения,
+                // а наружу приходит пустая строка.
+                $reply = $llm->chat([
+                    ['role' => 'user', 'content' => 'Ответь одним словом: работает?'],
+                ], [], ['max_tokens' => 256]);
+                $ms = (int) ((microtime(true) - $startedAt) * 1000);
+
+                $answer = trim((string) $reply['content']);
+
+                if ($answer !== '') {
+                    $this->info("  модель ответила за {$ms} мс: «".mb_substr($answer, 0, 60)."»");
+                } elseif (trim((string) ($reply['thinking'] ?? '')) !== '') {
+                    $this->warn("  модель отвечала {$ms} мс, но весь ответ ушёл в рассуждения.");
+                    $this->line('     Связь есть. Если такое повторяется в чате — увеличьте LLM_MAX_TOKENS.');
+                } else {
+                    $this->error("  модель вернула пустой ответ за {$ms} мс.");
+                    $ok = false;
+                }
+            } catch (\Throwable $e) {
+                $this->error('  модель не ответила: '.$e->getMessage());
+                $ok = false;
+            }
+        }
+
         $this->line('');
         $this->line('<comment>Драйверы подключения к чужим базам</comment>');
 
