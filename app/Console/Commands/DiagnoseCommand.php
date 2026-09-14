@@ -115,9 +115,12 @@ class DiagnoseCommand extends Command
                 // Лимит с запасом: рассуждающие модели сначала думают,
                 // и на коротком лимите весь ответ уходит в рассуждения,
                 // а наружу приходит пустая строка.
+                // Таймаут короткий намеренно: диагностика должна отвечать
+                // быстро. Если модель не осилила два слова за две минуты,
+                // проблема не в таймауте, и ждать дольше незачем.
                 $reply = $llm->chat([
                     ['role' => 'user', 'content' => 'Ответь одним словом: работает?'],
-                ], [], ['max_tokens' => 256]);
+                ], [], ['max_tokens' => 256, 'timeout' => 120]);
                 $ms = (int) ((microtime(true) - $startedAt) * 1000);
 
                 $answer = trim((string) $reply['content']);
@@ -143,8 +146,19 @@ class DiagnoseCommand extends Command
                     $this->critical[] = 'модель не отвечает';
                 }
             } catch (\Throwable $e) {
-                $this->error('  модель не ответила: '.$e->getMessage());
-                $this->critical[] = 'модель не отвечает: '.$e->getMessage();
+                $timedOut = str_contains($e->getMessage(), 'imed out')
+                         || str_contains($e->getMessage(), 'error 28');
+
+                if ($timedOut) {
+                    $this->error('  модель не ответила за 2 минуты на вопрос из двух слов');
+                    $this->line('     Это не сетевая проблема: соединение есть, вектора считаются.');
+                    $this->line('     Почти наверняка модель считается процессором или не помещается');
+                    $this->line('     в память. Смотрите README, раздел «Модель считается процессором».');
+                    $this->critical[] = 'модель не отвечает за 2 минуты — почти наверняка считается процессором';
+                } else {
+                    $this->error('  модель не ответила: '.$e->getMessage());
+                    $this->critical[] = 'модель не отвечает: '.$e->getMessage();
+                }
             }
         }
 
@@ -152,9 +166,22 @@ class DiagnoseCommand extends Command
         // и отвечать, но с окном, в которое найденные документы не влезают.
         $loaded = $llm->loadedModels();
 
-        if ($loaded !== []) {
+        if (config('llm.driver') === 'ollama') {
             $this->line('');
             $this->line('<comment>Чем считается модель</comment>');
+
+            if ($loaded === []) {
+                // Пустой список — это не «нет данных», а «ни одна модель
+                // не держится в памяти». Значит каждый вопрос поднимает её
+                // с диска заново, и первый же ответ будет очень долгим.
+                $this->error('  ни одна модель не загружена в память');
+                $this->line('     Каждый вопрос будет поднимать модель с диска заново.');
+                $this->line('     Если модель большая, а свободной памяти мало, она может');
+                $this->line('     вообще не поместиться — тогда ответа не будет никогда.');
+                $this->line('     Проверьте свободную память (см. ниже) и раздел README');
+                $this->line('     «Модель считается процессором».');
+                $this->critical[] = 'модель не держится в памяти';
+            }
 
             foreach ($loaded as $name => $info) {
                 if (str_contains($name, (string) config('llm.embedding_model'))) {
@@ -213,6 +240,24 @@ class DiagnoseCommand extends Command
                     $this->line('     docker compose up -d --force-recreate ollama');
                     $this->critical[] = "окно контекста мало ({$length} вместо {$needed}) — документы обрезаются";
                 }
+            }
+        }
+
+        if (is_readable('/proc/meminfo')) {
+            $meminfo = file_get_contents('/proc/meminfo');
+            preg_match('/MemTotal:\s+(\d+)/', $meminfo, $total);
+            preg_match('/MemAvailable:\s+(\d+)/', $meminfo, $available);
+
+            if (! empty($total[1])) {
+                $this->line('');
+                $this->line('<comment>Память</comment>');
+                $this->line(sprintf(
+                    '  системе видно %d ГБ, свободно %d ГБ',
+                    (int) ($total[1] / 1024 / 1024),
+                    (int) (($available[1] ?? 0) / 1024 / 1024)
+                ));
+                $this->line('  Если физически памяти больше, остальное отдано видеоядру.');
+                $this->line('  Модель, считаемая процессором, должна поместиться именно сюда.');
             }
         }
 

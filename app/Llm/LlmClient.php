@@ -98,7 +98,9 @@ class LlmClient
             'stream'      => false,
         ], fn ($v) => $v !== null);
 
-        $response = $this->withSlot(fn () => $this->http()->post('/chat/completions', $payload));
+        $response = $this->withSlot(
+            fn () => $this->http($options['timeout'] ?? null)->post('/chat/completions', $payload)
+        );
 
         if ($response->failed()) {
             Log::error('LLM chat failed', ['status' => $response->status(), 'body' => $response->body()]);
