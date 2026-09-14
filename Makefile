@@ -61,6 +61,9 @@ check: ## Проверить машину перед установкой (ни�
 deploy: ## Обновить проект из git и перезапустить
 	./deploy.sh
 
+host-ollama: ## Перевести нейросеть на Ollama, установленную в систему
+	sudo ./deploy/use-host-ollama.sh
+
 https: ## Включить HTTPS (нужен для записи голоса с телефонов)
 	@read -p "Адрес моноблока в сети (IP или имя): " host; \
 	./deploy/make-cert.sh $$host && \
@@ -72,4 +75,4 @@ models: ## Скачать модели в Ollama (нужен интернет)
 	$(DC) exec ollama ollama pull $$(grep '^LLM_MODEL=' .env | cut -d= -f2)
 	$(DC) exec ollama ollama pull $$(grep '^LLM_EMBEDDING_MODEL=' .env | cut -d= -f2)
 
-.PHONY: help up down restart build logs shell diagnose migrate sync reindex test assets assets-docker warmup bench check deploy https models
+.PHONY: help up down restart build logs shell diagnose migrate sync reindex test assets assets-docker warmup bench check host-ollama deploy https models
