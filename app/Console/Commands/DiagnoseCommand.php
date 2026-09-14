@@ -69,6 +69,26 @@ class DiagnoseCommand extends Command
         }
 
         $this->line('');
+        $this->line('<comment>Драйверы подключения к чужим базам</comment>');
+
+        $drivers = \PDO::getAvailableDrivers();
+
+        in_array('pgsql', $drivers, true)
+            ? $this->info('  PostgreSQL: есть')
+            : $this->error('  PostgreSQL: НЕТ — это обязательный драйвер');
+
+        if (in_array('sqlsrv', $drivers, true)) {
+            $this->info('  Microsoft SQL Server: есть — базу 1С на MS SQL подключить можно');
+        } else {
+            $this->warn('  Microsoft SQL Server: нет');
+            $this->line('     Это не ошибка. Драйвер нужен только для 1С на MS SQL напрямую.');
+            $this->line('     Через OData и на PostgreSQL всё работает без него.');
+        }
+
+        $this->line('  Клиент Redis: '.config('database.redis.client')
+                   .(extension_loaded('redis') ? '' : ' (расширения phpredis нет, работаем на чистом PHP)'));
+
+        $this->line('');
         $this->line('<comment>Вложения в чате</comment>');
 
         $vision = trim((string) config('llm.vision_model'));

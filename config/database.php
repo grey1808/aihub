@@ -145,7 +145,11 @@ return [
 
     'redis' => [
 
-        'client' => env('REDIS_CLIENT', 'phpredis'),
+        // Расширение phpredis быстрее, но ставится через pecl, а он доступен
+        // не в каждой сети. Если расширения нет — молча переходим на predis,
+        // это та же работа на чистом PHP. Иначе приложение падало бы
+        // на первом же обращении к кэшу.
+        'client' => env('REDIS_CLIENT', extension_loaded('redis') ? 'phpredis' : 'predis'),
 
         'options' => [
             'cluster' => env('REDIS_CLUSTER', 'redis'),

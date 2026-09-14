@@ -96,6 +96,21 @@ class OneCSqlConnector implements Connector
 
     public function test(): array
     {
+        $driver = $this->source->plainConfig()['driver'] ?? 'pgsql';
+
+        // Без драйвера PDO сообщение от самого PHP невнятное («could not find
+        // driver»), и админ идёт искать проблему в логине и пароле.
+        if (! in_array($driver, \PDO::getAvailableDrivers(), true)) {
+            return [
+                'ok' => false,
+                'message' => $driver === 'sqlsrv'
+                    ? 'В приложении нет драйвера Microsoft SQL Server — при сборке его установить не удалось. '
+                     .'Варианты: подключиться к 1С через OData (обычно это и проще), либо пересобрать приложение '
+                     .'на машине с доступом к pecl.php.net.'
+                    : "В приложении нет драйвера «{$driver}».",
+            ];
+        }
+
         try {
             $connection = DynamicConnection::for($this->source);
             $connection->select('SELECT 1 AS ok');
