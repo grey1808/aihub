@@ -3,7 +3,10 @@
 
 .DEFAULT_GOAL := help
 DC := docker compose
-DCO := docker compose --profile with-ollama
+
+# Со всеми профилями: иначе down оставляет контейнеры, поднятые другим
+# профилем, и они держат сеть — «Resource is still in use».
+DCA := docker compose --profile with-ollama --profile with-whisper
 
 help: ## Показать список команд
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -12,13 +15,13 @@ up: ## Поднять всё: сервисы, модели, прогрев. CHEC
 	@GPU=$(GPU) CHECK=$(CHECK) bash deploy/setup.sh || true
 
 down: ## Остановить всё
-	$(DCO) down
+	$(DCA) down
 
 restart: ## Перезапустить
-	$(DCO) restart
+	$(DCA) restart
 
 build: ## Пересобрать образы
-	$(DCO) build
+	$(DCA) build
 
 logs: ## Смотреть логи приложения
 	$(DC) logs -f app worker
