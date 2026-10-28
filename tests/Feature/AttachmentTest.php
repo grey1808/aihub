@@ -37,6 +37,23 @@ class AttachmentTest extends TestCase
         Storage::disk('attachments')->assertExists($attachment->path);
     }
 
+    public function test_таблица_excel_загружается_и_из_неё_достаётся_текст(): void
+    {
+        $user = User::factory()->create();
+
+        $book = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $book->getActiveSheet()->fromArray([['Бетон В25', 'м3', 120]]);
+        $path = tempnam(sys_get_temp_dir(), 'kp');
+        (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($book))->save($path);
+
+        $response = $this->actingAs($user)->post('/attachments', [
+            'file' => new UploadedFile($path, 'kp.xlsx', null, null, true),
+        ]);
+
+        $response->assertCreated()->assertJson(['kind' => 'document', 'status' => 'ready']);
+        $this->assertStringContainsString('Бетон В25 | м3 | 120', ChatAttachment::first()->extracted_text);
+    }
+
     public function test_картинка_загружается_но_текст_из_неё_не_достаётся(): void
     {
         $user = User::factory()->create();

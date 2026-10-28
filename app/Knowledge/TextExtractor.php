@@ -2,6 +2,10 @@
 
 namespace App\Knowledge;
 
+use PhpOffice\PhpSpreadsheet\Cell\Cell;
+use PhpOffice\PhpSpreadsheet\Cell\DataType;
+use PhpOffice\PhpSpreadsheet\IOFactory as SpreadsheetIOFactory;
+use PhpOffice\PhpSpreadsheet\Style\NumberFormat;
 use PhpOffice\PhpWord\IOFactory;
 use Smalot\PdfParser\Parser as PdfParser;
 
@@ -20,6 +24,7 @@ class TextExtractor
                 'pdf'                        => $this->fromPdf($path),
                 'doc', 'docx', 'odt', 'rtf'  => $this->fromWord($path, $extension),
                 'html', 'htm', 'xml'         => $this->fromHtml(file_get_contents($path)),
+                'xlsx', 'xlsm', 'xls', 'ods' => $this->fromSpreadsheet($path, $extension),
                 'csv'                        => $this->fromCsv($path),
                 'json'                       => $this->fromJson($path),
                 'txt', 'md'                  => file_get_contents($path),
@@ -125,6 +130,74 @@ class TextExtractor
         fclose($handle);
 
         return implode("\n", $lines);
+    }
+
+    private function fromSpreadsheet(string $path, string $extension): string
+    {
+        $reader = SpreadsheetIOFactory::createReader(match ($extension) {
+            'xlsx', 'xlsm' => 'Xlsx',
+            'xls'          => 'Xls',
+            'ods'          => 'Ods',
+        });
+        $reader->setReadEmptyCells(false);
+
+        $spreadsheet = $reader->load($path);
+        $parts = [];
+        $total = 0;
+
+        foreach ($spreadsheet->getWorksheetIterator() as $sheet) {
+            $lines = [];
+
+            foreach ($sheet->getRowIterator() as $row) {
+                $cells = [];
+
+                foreach ($row->getCellIterator() as $cell) {
+                    $cells[] = trim($this->spreadsheetCellText($cell));
+                }
+
+                // Хвостовые пустые ячейки — шум, пустые строки — тем более.
+                while ($cells && end($cells) === '') {
+                    array_pop($cells);
+                }
+
+                if ($cells) {
+                    $lines[] = implode(' | ', $cells);
+                }
+
+                if (++$total > 20000) {
+                    break 2; // защита от гигантских выгрузок, как у csv
+                }
+            }
+
+            if ($lines) {
+                // Имя листа помогает понять, о чём таблица: «Смета», «КП Стройбаза».
+                $parts[] = 'Лист «'.$sheet->getTitle()."»\n".implode("\n", $lines);
+            }
+        }
+
+        $spreadsheet->disconnectWorksheets();
+
+        return implode("\n\n", $parts);
+    }
+
+    private function spreadsheetCellText(Cell $cell): string
+    {
+        if ($cell->getDataType() !== DataType::TYPE_FORMULA) {
+            return (string) $cell->getFormattedValue();
+        }
+
+        // Формулу не пересчитываем: она может ссылаться на другие книги
+        // или на функции, которых библиотека не знает. Берём то значение,
+        // которое Excel сохранил в файле, — его же видел и человек.
+        $value = $cell->getOldCalculatedValue();
+
+        if ($value === null || $value === '') {
+            return '';
+        }
+
+        return is_numeric($value)
+            ? NumberFormat::toFormattedString($value, $cell->getStyle()->getNumberFormat()->getFormatCode())
+            : (string) $value;
     }
 
     private function fromJson(string $path): string

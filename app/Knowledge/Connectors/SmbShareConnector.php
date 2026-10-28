@@ -53,7 +53,7 @@ class SmbShareConnector implements Connector
             ['name' => 'domain', 'label' => 'Домен', 'type' => 'text', 'placeholder' => 'WORKGROUP'],
 
             ['name' => 'extensions', 'label' => 'Расширения файлов', 'type' => 'text',
-             'placeholder' => 'pdf,docx,txt', 'help' => 'Через запятую. Пусто — все поддерживаемые.'],
+             'placeholder' => 'pdf,docx,xlsx,txt', 'help' => 'Через запятую. Пусто — все поддерживаемые.'],
         ];
     }
 

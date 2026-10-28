@@ -24,7 +24,7 @@ return [
     'max_file_size' => (int) env('RAG_MAX_FILE_SIZE', 52428800), // 50 МБ
 
     // Какие расширения умеем читать.
-    'extensions' => ['txt', 'md', 'pdf', 'doc', 'docx', 'rtf', 'odt', 'csv', 'html', 'htm', 'xml', 'json'],
+    'extensions' => ['txt', 'md', 'pdf', 'doc', 'docx', 'rtf', 'odt', 'xlsx', 'xlsm', 'xls', 'ods', 'csv', 'html', 'htm', 'xml', 'json'],
 
     // Искать по базе знаний автоматически перед каждым вопросом.
     // Выключать стоит только если модель уверенно сама вызывает инструменты

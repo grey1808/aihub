@@ -23,7 +23,7 @@ return [
     // Разрешённые расширения по типам.
     'images'    => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif'],
     'audio'     => ['mp3', 'wav', 'ogg', 'oga', 'opus', 'webm', 'm4a', 'aac', 'flac', 'amr', 'mp4'],
-    'documents' => ['pdf', 'doc', 'docx', 'odt', 'rtf', 'txt', 'md', 'csv', 'html', 'htm', 'xml', 'json'],
+    'documents' => ['pdf', 'doc', 'docx', 'odt', 'rtf', 'xlsx', 'xlsm', 'xls', 'ods', 'txt', 'md', 'csv', 'html', 'htm', 'xml', 'json'],
 
     // Через сколько часов удалять файлы, которые загрузили,
     // но так и не отправили сообщением.
